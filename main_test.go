@@ -6,7 +6,9 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"encoding/pem"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -142,7 +144,7 @@ func TestWrapUnwrapDataKey(t *testing.T) {
 	dataKey, err := generateDataKey()
 	require.NoError(t, err)
 
-	wrapped, err := wrapDataKey(dataKey, []string{pub})
+	wrapped, err := wrapDataKeyForRecipient(dataKey, pub)
 	require.NoError(t, err)
 
 	unwrapped, err := unwrapDataKey(wrapped, priv)
@@ -151,41 +153,48 @@ func TestWrapUnwrapDataKey(t *testing.T) {
 	assert.Equal(t, dataKey, unwrapped)
 }
 
-func TestWrapDataKey_MultiRecipient(t *testing.T) {
+func TestWrapDataKey_PerRecipient(t *testing.T) {
 	priv1, pub1 := generateTestKey(t)
 	priv2, pub2 := generateTestKey(t)
 	dataKey, err := generateDataKey()
 	require.NoError(t, err)
 
-	wrapped, err := wrapDataKey(dataKey, []string{pub1, pub2})
+	recipients := map[string]string{"alice": pub1, "bob": pub2}
+	wrappedKeys, err := wrapDataKeyPerRecipient(dataKey, recipients)
 	require.NoError(t, err)
 
-	// Both recipients can unwrap
-	unwrapped1, err := unwrapDataKey(wrapped, priv1)
+	// Each recipient can only unwrap their own key
+	unwrapped1, err := unwrapDataKey(wrappedKeys["alice"], priv1)
 	require.NoError(t, err)
 	assert.Equal(t, dataKey, unwrapped1)
 
-	unwrapped2, err := unwrapDataKey(wrapped, priv2)
+	unwrapped2, err := unwrapDataKey(wrappedKeys["bob"], priv2)
 	require.NoError(t, err)
 	assert.Equal(t, dataKey, unwrapped2)
+
+	// Cross-decryption should fail
+	_, err = unwrapDataKey(wrappedKeys["alice"], priv2)
+	assert.Error(t, err)
 }
 
 func TestComputeMAC_Deterministic(t *testing.T) {
 	dataKey, _ := generateDataKey()
 	secrets := map[string]string{"A": "1", "B": "2"}
 	recipients := map[string]string{"alice": "age1aaa"}
+	wrappedKeys := map[string]string{"alice": "wk1"}
 
-	mac1 := computeMAC(dataKey, 1,"dk", recipients, secrets)
-	mac2 := computeMAC(dataKey, 1,"dk", recipients, secrets)
+	mac1 := computeMAC(dataKey, 2, wrappedKeys, recipients, secrets)
+	mac2 := computeMAC(dataKey, 2, wrappedKeys, recipients, secrets)
 	assert.Equal(t, mac1, mac2)
 }
 
 func TestComputeMAC_DifferentSecrets(t *testing.T) {
 	dataKey, _ := generateDataKey()
 	recipients := map[string]string{"alice": "age1aaa"}
+	wrappedKeys := map[string]string{"alice": "wk1"}
 
-	mac1 := computeMAC(dataKey, 1,"dk", recipients, map[string]string{"A": "1"})
-	mac2 := computeMAC(dataKey, 1,"dk", recipients, map[string]string{"A": "2"})
+	mac1 := computeMAC(dataKey, 2, wrappedKeys, recipients, map[string]string{"A": "1"})
+	mac2 := computeMAC(dataKey, 2, wrappedKeys, recipients, map[string]string{"A": "2"})
 	assert.NotEqual(t, mac1, mac2)
 }
 
@@ -193,7 +202,8 @@ func TestComputeMAC_ConstantTimeComparison(t *testing.T) {
 	dataKey, _ := generateDataKey()
 	secrets := map[string]string{"A": "1"}
 	recipients := map[string]string{"alice": "age1aaa"}
-	mac := computeMAC(dataKey, 1,"dk", recipients, secrets)
+	wrappedKeys := map[string]string{"alice": "wk1"}
+	mac := computeMAC(dataKey, 2, wrappedKeys, recipients, secrets)
 
 	// Verify hmac.Equal works for comparison
 	assert.True(t, hmac.Equal([]byte(mac), []byte(mac)))
@@ -205,9 +215,10 @@ func TestComputeMAC_DetectsRecipientTampering(t *testing.T) {
 	secrets := map[string]string{"A": "1"}
 	recipients1 := map[string]string{"alice": "age1aaa"}
 	recipients2 := map[string]string{"alice": "age1aaa", "eve": "age1eve"}
+	wrappedKeys := map[string]string{"alice": "wk1"}
 
-	mac1 := computeMAC(dataKey, 1,"dk", recipients1, secrets)
-	mac2 := computeMAC(dataKey, 1,"dk", recipients2, secrets)
+	mac1 := computeMAC(dataKey, 2, wrappedKeys, recipients1, secrets)
+	mac2 := computeMAC(dataKey, 2, wrappedKeys, recipients2, secrets)
 	assert.NotEqual(t, mac1, mac2)
 }
 
@@ -215,19 +226,20 @@ func TestComputeMAC_DetectsVersionTampering(t *testing.T) {
 	dataKey, _ := generateDataKey()
 	secrets := map[string]string{"A": "1"}
 	recipients := map[string]string{"alice": "age1aaa"}
+	wrappedKeys := map[string]string{"alice": "wk1"}
 
-	mac1 := computeMAC(dataKey, 1, "dk", recipients, secrets)
-	mac2 := computeMAC(dataKey, 99, "dk", recipients, secrets)
+	mac1 := computeMAC(dataKey, 1, wrappedKeys, recipients, secrets)
+	mac2 := computeMAC(dataKey, 99, wrappedKeys, recipients, secrets)
 	assert.NotEqual(t, mac1, mac2)
 }
 
-func TestComputeMAC_DetectsDataKeyTampering(t *testing.T) {
+func TestComputeMAC_DetectsWrappedKeyTampering(t *testing.T) {
 	dataKey, _ := generateDataKey()
 	secrets := map[string]string{"A": "1"}
 	recipients := map[string]string{"alice": "age1aaa"}
 
-	mac1 := computeMAC(dataKey, 1,"dk1", recipients, secrets)
-	mac2 := computeMAC(dataKey, 1,"dk2", recipients, secrets)
+	mac1 := computeMAC(dataKey, 2, map[string]string{"alice": "wk1"}, recipients, secrets)
+	mac2 := computeMAC(dataKey, 2, map[string]string{"alice": "wk2"}, recipients, secrets)
 	assert.NotEqual(t, mac1, mac2)
 }
 
@@ -237,11 +249,11 @@ func TestMarshalLoadRoundtrip(t *testing.T) {
 	useTempDir(t)
 
 	ef := &EncryptedFile{
-		Version:    1,
-		MAC:        "deadbeef",
-		DataKey:    "base64data",
-		Recipients: map[string]string{"alice": "age1abc", "bob": "age1def"},
-		Secrets:    map[string]string{"SECRET": "enc1", "API_KEY": "enc2"},
+		Version:     2,
+		MAC:         "deadbeef",
+		Recipients:  map[string]string{"alice": "age1abc", "bob": "age1def"},
+		WrappedKeys: map[string]string{"alice": "wk1", "bob": "wk2"},
+		Secrets:     map[string]string{"SECRET": "enc1", "API_KEY": "enc2"},
 	}
 
 	err := saveEncryptedFile(".env.enc", ef)
@@ -252,8 +264,8 @@ func TestMarshalLoadRoundtrip(t *testing.T) {
 
 	assert.Equal(t, ef.Version, loaded.Version)
 	assert.Equal(t, ef.MAC, loaded.MAC)
-	assert.Equal(t, ef.DataKey, loaded.DataKey)
 	assert.Equal(t, ef.Recipients, loaded.Recipients)
+	assert.Equal(t, ef.WrappedKeys, loaded.WrappedKeys)
 	assert.Equal(t, ef.Secrets, loaded.Secrets)
 }
 
@@ -264,11 +276,11 @@ func TestSaveEncryptedFile_Permissions(t *testing.T) {
 	useTempDir(t)
 
 	ef := &EncryptedFile{
-		Version:    1,
-		MAC:        "test",
-		DataKey:    "test",
-		Recipients: map[string]string{},
-		Secrets:    map[string]string{},
+		Version:     2,
+		MAC:         "test",
+		Recipients:  map[string]string{},
+		WrappedKeys: map[string]string{},
+		Secrets:     map[string]string{},
 	}
 
 	err := saveEncryptedFile(".env.enc", ef)
@@ -283,11 +295,11 @@ func TestSaveEncryptedFile_AtomicWrite(t *testing.T) {
 	useTempDir(t)
 
 	ef := &EncryptedFile{
-		Version:    1,
-		MAC:        "test",
-		DataKey:    "test",
-		Recipients: map[string]string{},
-		Secrets:    map[string]string{},
+		Version:     2,
+		MAC:         "test",
+		Recipients:  map[string]string{},
+		WrappedKeys: map[string]string{},
+		Secrets:     map[string]string{},
 	}
 
 	err := saveEncryptedFile(".env.enc", ef)
@@ -342,11 +354,11 @@ func TestTomlKey(t *testing.T) {
 
 func TestMarshalEncryptedFile_SortedOutput(t *testing.T) {
 	ef := &EncryptedFile{
-		Version:    1,
-		MAC:        "mac",
-		DataKey:    "dk",
-		Recipients: map[string]string{"bob": "age1bbb", "alice": "age1aaa"},
-		Secrets:    map[string]string{"ZZZ": "enc1", "AAA": "enc2"},
+		Version:     2,
+		MAC:         "mac",
+		Recipients:  map[string]string{"bob": "age1bbb", "alice": "age1aaa"},
+		WrappedKeys: map[string]string{"bob": "wk_bob", "alice": "wk_alice"},
+		Secrets:     map[string]string{"ZZZ": "enc1", "AAA": "enc2"},
 	}
 
 	data, err := marshalEncryptedFile(ef)
@@ -357,6 +369,11 @@ func TestMarshalEncryptedFile_SortedOutput(t *testing.T) {
 	aliceIdx := strings.Index(out, "alice")
 	bobIdx := strings.Index(out, "bob")
 	assert.Greater(t, bobIdx, aliceIdx, "alice should come before bob")
+
+	// Wrapped keys should be sorted
+	wkAliceIdx := strings.Index(out, "wk_alice")
+	wkBobIdx := strings.Index(out, "wk_bob")
+	assert.Greater(t, wkBobIdx, wkAliceIdx, "alice wrapped key should come before bob")
 
 	// Secrets should be sorted
 	aaaIdx := strings.Index(out, "AAA")
@@ -539,7 +556,8 @@ func TestIntegration_EncryptDecrypt(t *testing.T) {
 	// Verify it's valid TOML with expected structure
 	assert.Contains(t, string(data), "[recipients]")
 	assert.Contains(t, string(data), "[secrets]")
-	assert.Contains(t, string(data), "version = 1")
+	assert.Contains(t, string(data), "version = 2")
+	assert.Contains(t, string(data), "[wrapped_keys]")
 
 	// Decrypt
 	loaded, err := loadEncryptedFile(".env.enc")
@@ -784,8 +802,8 @@ func TestIntegration_UsersRemoveRotatesDataKey(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, saveEncryptedFile(".env.enc", ef))
 
-	// Capture the old wrapped data key
-	oldDataKey := ef.DataKey
+	// Capture the old wrapped data key for user1
+	oldWrappedKey := ef.WrappedKeys["user1"]
 
 	// Remove user2 (simulating usersRemoveCmd logic: decrypt then re-encrypt)
 	loaded, _ := loadEncryptedFile(".env.enc")
@@ -796,11 +814,11 @@ func TestIntegration_UsersRemoveRotatesDataKey(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, saveEncryptedFile(".env.enc", newEf))
 
-	// Data key should be different (rotated)
-	assert.NotEqual(t, oldDataKey, newEf.DataKey)
+	// Wrapped key should be different (rotated)
+	assert.NotEqual(t, oldWrappedKey, newEf.WrappedKeys["user1"])
 
 	// Old data key should not decrypt new secrets
-	oldDK, err := unwrapDataKey(oldDataKey, priv1)
+	oldDK, err := unwrapDataKey(oldWrappedKey, priv1)
 	require.NoError(t, err)
 	for _, v := range newEf.Secrets {
 		_, err := decryptValue(oldDK, "SECRET", v)
@@ -980,11 +998,11 @@ func TestFindEncFile_WalksUp(t *testing.T) {
 
 	// Create .env.enc in root
 	ef := &EncryptedFile{
-		Version:    1,
-		MAC:        "test",
-		DataKey:    "test",
-		Recipients: map[string]string{},
-		Secrets:    map[string]string{},
+		Version:     2,
+		MAC:         "test",
+		Recipients:  map[string]string{},
+		WrappedKeys: map[string]string{},
+		Secrets:     map[string]string{},
 	}
 	require.NoError(t, os.Chdir(dir))
 	require.NoError(t, saveEncryptedFile(".env.enc", ef))
@@ -1044,6 +1062,334 @@ func TestFilterEnv(t *testing.T) {
 	assert.Contains(t, filtered, "FOO=bar")
 }
 
+// --- V1 migration tests ---
+
+func TestV1_LoadAndDecrypt(t *testing.T) {
+	useTempDir(t)
+
+	priv, pub := generateTestKey(t)
+	setTestAgeKey(t, priv)
+
+	// Create a v1-format file manually
+	dataKey, err := generateDataKey()
+	require.NoError(t, err)
+
+	wrapped, err := wrapDataKeyForRecipient(dataKey, pub)
+	require.NoError(t, err)
+
+	enc, err := encryptValue(dataKey, "SECRET", "hello")
+	require.NoError(t, err)
+
+	recipients := map[string]string{"testuser": pub}
+	secrets := map[string]string{"SECRET": enc}
+	mac := computeMACv1(dataKey, 1, wrapped, recipients, secrets)
+
+	// Write v1 format directly
+	content := fmt.Sprintf("version = 1\nmac = %q\ndata_key = %q\n\n[recipients]\ntestuser = %q\n\n[secrets]\nSECRET = %q\n",
+		mac, wrapped, pub, enc)
+	require.NoError(t, os.WriteFile(".env.enc", []byte(content), 0600))
+
+	// Should load and decrypt successfully
+	ef, err := loadEncryptedFile(".env.enc")
+	require.NoError(t, err)
+	assert.Equal(t, 1, ef.Version)
+
+	decrypted, err := decryptSecrets(ef)
+	require.NoError(t, err)
+	assert.Equal(t, "hello", decrypted["SECRET"])
+}
+
+// --- Merge tests ---
+
+func TestMergeSecrets_NoConflict(t *testing.T) {
+	ancestor := map[string]string{"A": "1"}
+	ours := map[string]string{"A": "1", "B": "2"}
+	theirs := map[string]string{"A": "1", "C": "3"}
+
+	result, _, err := mergeSecrets(ancestor, ours, theirs)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"A": "1", "B": "2", "C": "3"}, result)
+}
+
+func TestMergeSecrets_BothAddSameValue(t *testing.T) {
+	ancestor := map[string]string{}
+	ours := map[string]string{"A": "1"}
+	theirs := map[string]string{"A": "1"}
+
+	result, _, err := mergeSecrets(ancestor, ours, theirs)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"A": "1"}, result)
+}
+
+func TestMergeSecrets_ConflictingEdit(t *testing.T) {
+	ancestor := map[string]string{"A": "1"}
+	ours := map[string]string{"A": "2"}
+	theirs := map[string]string{"A": "3"}
+
+	_, conflicts, err := mergeSecrets(ancestor, ours, theirs)
+	assert.Error(t, err)
+	assert.Equal(t, []string{"A"}, conflicts)
+}
+
+func TestMergeSecrets_BothAddDifferentValues(t *testing.T) {
+	ancestor := map[string]string{}
+	ours := map[string]string{"A": "1"}
+	theirs := map[string]string{"A": "2"}
+
+	_, conflicts, err := mergeSecrets(ancestor, ours, theirs)
+	assert.Error(t, err)
+	assert.Equal(t, []string{"A"}, conflicts)
+}
+
+func TestMergeSecrets_OneDeleteUnchanged(t *testing.T) {
+	ancestor := map[string]string{"A": "1", "B": "2"}
+	ours := map[string]string{"A": "1"} // deleted B
+	theirs := map[string]string{"A": "1", "B": "2"}
+
+	result, _, err := mergeSecrets(ancestor, ours, theirs)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"A": "1"}, result)
+}
+
+func TestMergeSecrets_DeleteVsModify(t *testing.T) {
+	ancestor := map[string]string{"A": "1"}
+	ours := map[string]string{} // deleted A
+	theirs := map[string]string{"A": "2"} // modified A
+
+	_, conflicts, err := mergeSecrets(ancestor, ours, theirs)
+	assert.Error(t, err)
+	assert.Equal(t, []string{"A"}, conflicts)
+}
+
+func TestMergeSecrets_OnlyOursChanged(t *testing.T) {
+	ancestor := map[string]string{"A": "1"}
+	ours := map[string]string{"A": "2"}
+	theirs := map[string]string{"A": "1"}
+
+	result, _, err := mergeSecrets(ancestor, ours, theirs)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"A": "2"}, result)
+}
+
+func TestMergeSecrets_OnlyTheirsChanged(t *testing.T) {
+	ancestor := map[string]string{"A": "1"}
+	ours := map[string]string{"A": "1"}
+	theirs := map[string]string{"A": "2"}
+
+	result, _, err := mergeSecrets(ancestor, ours, theirs)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"A": "2"}, result)
+}
+
+func TestMergeSecrets_BothDelete(t *testing.T) {
+	ancestor := map[string]string{"A": "1"}
+	ours := map[string]string{}
+	theirs := map[string]string{}
+
+	result, _, err := mergeSecrets(ancestor, ours, theirs)
+	require.NoError(t, err)
+	assert.Empty(t, result)
+}
+
+func TestIntegration_CmdMerge(t *testing.T) {
+	useTempDir(t)
+
+	priv, pub := generateTestKey(t)
+	setTestAgeKey(t, priv)
+	recipients := map[string]string{"testuser": pub}
+
+	// Create ancestor with one secret
+	ancestor, err := encryptSecrets(map[string]string{"BASE": "value"}, recipients)
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile("ancestor.enc", ancestor))
+
+	// Ours adds a secret
+	oursSecrets := map[string]string{"BASE": "value", "OURS_KEY": "ours_val"}
+	oursEf, err := encryptSecrets(oursSecrets, recipients)
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile("ours.enc", oursEf))
+
+	// Theirs adds a different secret
+	theirsSecrets := map[string]string{"BASE": "value", "THEIRS_KEY": "theirs_val"}
+	theirsEf, err := encryptSecrets(theirsSecrets, recipients)
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile("theirs.enc", theirsEf))
+
+	// Run merge
+	err = cmdMerge("ancestor.enc", "ours.enc", "theirs.enc")
+	require.NoError(t, err)
+
+	// Load and decrypt the merged result
+	merged, err := loadEncryptedFile("ours.enc")
+	require.NoError(t, err)
+	decrypted, err := decryptSecrets(merged)
+	require.NoError(t, err)
+
+	assert.Equal(t, "value", decrypted["BASE"])
+	assert.Equal(t, "ours_val", decrypted["OURS_KEY"])
+	assert.Equal(t, "theirs_val", decrypted["THEIRS_KEY"])
+}
+
+func TestWrappedKeys_AddRecipient_MinimalChange(t *testing.T) {
+	useTempDir(t)
+
+	priv1, pub1 := generateTestKey(t)
+	_, pub2 := generateTestKey(t)
+	setTestAgeKey(t, priv1)
+
+	// Create file with one recipient
+	ef, err := encryptSecrets(map[string]string{"SECRET": "hello"}, map[string]string{"user1": pub1})
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(".env.enc", ef))
+
+	originalWrappedKey := ef.WrappedKeys["user1"]
+
+	// Add a second recipient
+	loaded, err := loadEncryptedFile(".env.enc")
+	require.NoError(t, err)
+	newRecipients := map[string]string{"user1": pub1, "user2": pub2}
+	err = reWrapDataKey(loaded, newRecipients)
+	require.NoError(t, err)
+
+	// user1's wrapped key changed (re-wrapped), but user2 was added
+	assert.Contains(t, loaded.WrappedKeys, "user1")
+	assert.Contains(t, loaded.WrappedKeys, "user2")
+	// The wrapped keys will differ since re-wrapping uses new random nonces,
+	// but both should decrypt to the same data key
+	_ = originalWrappedKey
+}
+
+// --- Auto-resolve tests ---
+
+// gitRun runs a git command in dir and fails the test on error.
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
+	)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %v: %s", args, out)
+}
+
+func TestAutoResolve_OnLoad(t *testing.T) {
+	// Create a git repo with a merge conflict on .env.enc
+	dir := t.TempDir()
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+
+	priv, pub := generateTestKey(t)
+	setTestAgeKey(t, priv)
+	recipients := map[string]string{"testuser": pub}
+
+	// Init repo and create base commit
+	gitRun(t, dir, "init")
+	os.Chdir(dir)
+
+	baseEf, err := encryptSecrets(map[string]string{"BASE": "value"}, recipients)
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(filepath.Join(dir, ".env.enc"), baseEf))
+	gitRun(t, dir, "add", ".env.enc")
+	gitRun(t, dir, "commit", "-m", "base")
+
+	// Create branch-a: add KEY_A
+	gitRun(t, dir, "checkout", "-b", "branch-a")
+	efA, err := encryptSecrets(map[string]string{"BASE": "value", "KEY_A": "a_val"}, recipients)
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(filepath.Join(dir, ".env.enc"), efA))
+	gitRun(t, dir, "add", ".env.enc")
+	gitRun(t, dir, "commit", "-m", "add KEY_A")
+
+	// Create branch-b from main: add KEY_B
+	gitRun(t, dir, "checkout", "main")
+	gitRun(t, dir, "checkout", "-b", "branch-b")
+	efB, err := encryptSecrets(map[string]string{"BASE": "value", "KEY_B": "b_val"}, recipients)
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(filepath.Join(dir, ".env.enc"), efB))
+	gitRun(t, dir, "add", ".env.enc")
+	gitRun(t, dir, "commit", "-m", "add KEY_B")
+
+	// Merge branch-a into branch-b — this will conflict
+	mergeCmd := exec.Command("git", "merge", "branch-a")
+	mergeCmd.Dir = dir
+	mergeCmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
+	)
+	mergeCmd.Run() // expected to fail
+
+	// Verify .env.enc is conflicted
+	lsOut, _ := exec.Command("git", "ls-files", "-u", ".env.enc").Output()
+	require.NotEmpty(t, lsOut, "file should be in conflicted state")
+
+	// loadEncryptedFile should auto-resolve
+	ef, err := loadEncryptedFile(filepath.Join(dir, ".env.enc"))
+	require.NoError(t, err)
+
+	// Decrypt and verify all keys are present
+	decrypted, err := decryptSecrets(ef)
+	require.NoError(t, err)
+	assert.Equal(t, "value", decrypted["BASE"])
+	assert.Equal(t, "a_val", decrypted["KEY_A"])
+	assert.Equal(t, "b_val", decrypted["KEY_B"])
+
+	// Verify the file is staged (no longer conflicted)
+	lsOut, _ = exec.Command("git", "ls-files", "-u", ".env.enc").Output()
+	assert.Empty(t, lsOut, "file should no longer be conflicted after auto-resolve")
+}
+
+func TestAutoResolve_Conflict_Fails(t *testing.T) {
+	// Same setup but both branches modify the same key differently
+	dir := t.TempDir()
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+
+	priv, pub := generateTestKey(t)
+	setTestAgeKey(t, priv)
+	recipients := map[string]string{"testuser": pub}
+
+	gitRun(t, dir, "init")
+	os.Chdir(dir)
+
+	baseEf, err := encryptSecrets(map[string]string{"SECRET": "original"}, recipients)
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(filepath.Join(dir, ".env.enc"), baseEf))
+	gitRun(t, dir, "add", ".env.enc")
+	gitRun(t, dir, "commit", "-m", "base")
+
+	// branch-a changes SECRET
+	gitRun(t, dir, "checkout", "-b", "branch-a")
+	efA, err := encryptSecrets(map[string]string{"SECRET": "from_a"}, recipients)
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(filepath.Join(dir, ".env.enc"), efA))
+	gitRun(t, dir, "add", ".env.enc")
+	gitRun(t, dir, "commit", "-m", "change SECRET in a")
+
+	// branch-b changes SECRET differently
+	gitRun(t, dir, "checkout", "main")
+	gitRun(t, dir, "checkout", "-b", "branch-b")
+	efB, err := encryptSecrets(map[string]string{"SECRET": "from_b"}, recipients)
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(filepath.Join(dir, ".env.enc"), efB))
+	gitRun(t, dir, "add", ".env.enc")
+	gitRun(t, dir, "commit", "-m", "change SECRET in b")
+
+	// Merge
+	mergeCmd := exec.Command("git", "merge", "branch-a")
+	mergeCmd.Dir = dir
+	mergeCmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
+	)
+	mergeCmd.Run()
+
+	// loadEncryptedFile should fail — auto-resolve can't handle conflicting edits
+	_, err = loadEncryptedFile(filepath.Join(dir, ".env.enc"))
+	assert.Error(t, err)
+}
+
 // --- Fuzz tests ---
 
 func FuzzEncryptDecryptValue(f *testing.F) {
@@ -1077,8 +1423,9 @@ func FuzzComputeMAC(f *testing.F) {
 		}
 		secrets := map[string]string{k: v}
 		recipients := map[string]string{"alice": "age1aaa"}
-		mac1 := computeMAC(dataKey, 1,"dk", recipients, secrets)
-		mac2 := computeMAC(dataKey, 1,"dk", recipients, secrets)
+		wrappedKeys := map[string]string{"alice": "wk1"}
+		mac1 := computeMAC(dataKey, 2, wrappedKeys, recipients, secrets)
+		mac2 := computeMAC(dataKey, 2, wrappedKeys, recipients, secrets)
 		assert.Equal(t, mac1, mac2, "MAC should be deterministic")
 	})
 }

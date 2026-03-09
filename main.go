@@ -38,7 +38,7 @@ import (
 const (
 	keychainService      = "shh-age-key"
 	defaultEncryptedFile = ".env.enc"
-	fileVersion          = 1
+	fileVersion          = 2
 )
 
 // --- Lipgloss Styles ---
@@ -85,11 +85,12 @@ var (
 // --- Encrypted File Format ---
 
 type EncryptedFile struct {
-	Version    int               `toml:"version"`
-	MAC        string            `toml:"mac"`
-	DataKey    string            `toml:"data_key"`
-	Recipients map[string]string `toml:"recipients"`
-	Secrets    map[string]string `toml:"secrets"`
+	Version     int               `toml:"version"`
+	MAC         string            `toml:"mac"`
+	DataKey     string            `toml:"data_key,omitempty"`     // v1 only, kept for migration
+	Recipients  map[string]string `toml:"recipients"`
+	WrappedKeys map[string]string `toml:"wrapped_keys,omitempty"` // v2: per-recipient wrapped data keys
+	Secrets     map[string]string `toml:"secrets"`
 }
 
 // --- Cobra Commands ---
@@ -260,6 +261,17 @@ func newRootCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmdDoctor()
+		},
+	})
+
+	// merge driver command (for git)
+	rootCmd.AddCommand(&cobra.Command{
+		Use:    "merge <ancestor> <ours> <theirs>",
+		Short:  "Git merge driver for .env.enc files",
+		Hidden: true,
+		Args:   cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdMerge(args[0], args[1], args[2])
 		},
 	})
 
@@ -533,17 +545,13 @@ func decryptValue(dataKey []byte, keyName string, encoded string) (string, error
 	return string(plaintext), nil
 }
 
-func wrapDataKey(dataKey []byte, recipientKeys []string) (string, error) {
-	var recipients []age.Recipient
-	for _, r := range recipientKeys {
-		rec, err := age.ParseX25519Recipient(r)
-		if err != nil {
-			return "", errors.Wrapf(err, "parse recipient %s", r)
-		}
-		recipients = append(recipients, rec)
+func wrapDataKeyForRecipient(dataKey []byte, pubKey string) (string, error) {
+	rec, err := age.ParseX25519Recipient(pubKey)
+	if err != nil {
+		return "", errors.Wrapf(err, "parse recipient %s", pubKey)
 	}
 	var buf bytes.Buffer
-	w, err := age.Encrypt(&buf, recipients...)
+	w, err := age.Encrypt(&buf, rec)
 	if err != nil {
 		return "", errors.Wrap(err, "age encrypt")
 	}
@@ -554,6 +562,18 @@ func wrapDataKey(dataKey []byte, recipientKeys []string) (string, error) {
 		return "", errors.Wrap(err, "close age writer")
 	}
 	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
+}
+
+func wrapDataKeyPerRecipient(dataKey []byte, recipients map[string]string) (map[string]string, error) {
+	wrapped := make(map[string]string, len(recipients))
+	for name, pubKey := range recipients {
+		w, err := wrapDataKeyForRecipient(dataKey, pubKey)
+		if err != nil {
+			return nil, errors.Wrapf(err, "wrap data key for %s", name)
+		}
+		wrapped[name] = w
+	}
+	return wrapped, nil
 }
 
 func unwrapDataKey(wrapped string, privateKey string) ([]byte, error) {
@@ -572,9 +592,8 @@ func unwrapDataKey(wrapped string, privateKey string) ([]byte, error) {
 	return io.ReadAll(r)
 }
 
-// computeMAC computes HMAC-SHA256 over all file fields: version, wrapped data key,
-// recipients, and encrypted secrets. This prevents tampering with any field.
-func computeMAC(dataKey []byte, version int, wrappedDataKey string, recipients map[string]string, secrets map[string]string) string {
+// computeMACv1 computes HMAC-SHA256 for v1 file format (single wrapped data key).
+func computeMACv1(dataKey []byte, version int, wrappedDataKey string, recipients map[string]string, secrets map[string]string) string {
 	mac := hmac.New(sha256.New, dataKey)
 	fmt.Fprintf(mac, "version:%d\x00", version)
 	mac.Write([]byte("data_key:"))
@@ -596,23 +615,143 @@ func computeMAC(dataKey []byte, version int, wrappedDataKey string, recipients m
 	return fmt.Sprintf("%x", mac.Sum(nil))
 }
 
+// computeMAC computes HMAC-SHA256 over all file fields for v2 format (per-recipient wrapped keys).
+func computeMAC(dataKey []byte, version int, wrappedKeys map[string]string, recipients map[string]string, secrets map[string]string) string {
+	mac := hmac.New(sha256.New, dataKey)
+	fmt.Fprintf(mac, "version:%d\x00", version)
+	for _, name := range sortedKeys(wrappedKeys) {
+		mac.Write([]byte("wrapped_key:"))
+		mac.Write([]byte(name))
+		mac.Write([]byte{0})
+		mac.Write([]byte(wrappedKeys[name]))
+		mac.Write([]byte{0})
+	}
+	for _, name := range sortedKeys(recipients) {
+		mac.Write([]byte("recipient:"))
+		mac.Write([]byte(name))
+		mac.Write([]byte{0})
+		mac.Write([]byte(recipients[name]))
+		mac.Write([]byte{0})
+	}
+	for _, k := range sortedKeys(secrets) {
+		mac.Write([]byte(k))
+		mac.Write([]byte{0})
+		mac.Write([]byte(secrets[k]))
+		mac.Write([]byte{0})
+	}
+	return fmt.Sprintf("%x", mac.Sum(nil))
+}
+
 // --- File I/O ---
 
 func loadEncryptedFile(path string) (*EncryptedFile, error) {
 	var ef EncryptedFile
 	if _, err := toml.DecodeFile(path, &ef); err != nil {
+		// Check if this file is in a git merge conflict
+		if resolved, resolveErr := tryAutoResolve(path); resolveErr == nil {
+			return resolved, nil
+		}
 		return nil, errors.Wrap(err, "parse encrypted file")
 	}
-	if ef.Version != fileVersion {
-		return nil, errors.Newf("unsupported file version: %d (expected %d)", ef.Version, fileVersion)
+	if ef.Version != 1 && ef.Version != 2 {
+		return nil, errors.Newf("unsupported file version: %d (expected 1 or 2)", ef.Version)
 	}
 	if ef.Recipients == nil {
 		ef.Recipients = make(map[string]string)
+	}
+	if ef.WrappedKeys == nil {
+		ef.WrappedKeys = make(map[string]string)
 	}
 	if ef.Secrets == nil {
 		ef.Secrets = make(map[string]string)
 	}
 	return &ef, nil
+}
+
+// tryAutoResolve checks if a file is in a git merge conflict and resolves it.
+// Returns the resolved EncryptedFile or an error if not conflicted / resolution fails.
+func tryAutoResolve(path string) (*EncryptedFile, error) {
+	dir := filepath.Dir(path)
+	if dir == "" {
+		dir = "."
+	}
+	base := filepath.Base(path)
+
+	gitCmd := func(args ...string) *exec.Cmd {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		return cmd
+	}
+
+	out, err := gitCmd("ls-files", "-u", base).Output()
+	if err != nil || len(out) == 0 {
+		return nil, errors.New("not a merge conflict")
+	}
+
+	ancestorData, err := gitCmd("show", ":1:"+base).Output()
+	if err != nil {
+		return nil, errors.Wrap(err, "git show ancestor")
+	}
+	oursData, err := gitCmd("show", ":2:"+base).Output()
+	if err != nil {
+		return nil, errors.Wrap(err, "git show ours")
+	}
+	theirsData, err := gitCmd("show", ":3:"+base).Output()
+	if err != nil {
+		return nil, errors.Wrap(err, "git show theirs")
+	}
+
+	ancestor, err := loadEncryptedFileFromBytes(ancestorData)
+	if err != nil {
+		return nil, errors.Wrap(err, "parse ancestor")
+	}
+	ours, err := loadEncryptedFileFromBytes(oursData)
+	if err != nil {
+		return nil, errors.Wrap(err, "parse ours")
+	}
+	theirs, err := loadEncryptedFileFromBytes(theirsData)
+	if err != nil {
+		return nil, errors.Wrap(err, "parse theirs")
+	}
+
+	ancestorSecrets, err := decryptSecrets(ancestor)
+	if err != nil {
+		return nil, errors.Wrap(err, "decrypt ancestor")
+	}
+	oursSecrets, err := decryptSecrets(ours)
+	if err != nil {
+		return nil, errors.Wrap(err, "decrypt ours")
+	}
+	theirsSecrets, err := decryptSecrets(theirs)
+	if err != nil {
+		return nil, errors.Wrap(err, "decrypt theirs")
+	}
+
+	mergedSecrets, conflicts, err := mergeSecrets(ancestorSecrets, oursSecrets, theirsSecrets)
+	if err != nil {
+		return nil, errors.Newf("cannot auto-resolve: conflicting keys: %s", strings.Join(conflicts, ", "))
+	}
+
+	mergedRecipients := mergeStringMaps(ancestor.Recipients, ours.Recipients, theirs.Recipients)
+
+	newEf, err := encryptSecrets(mergedSecrets, mergedRecipients)
+	if err != nil {
+		return nil, errors.Wrap(err, "re-encrypt")
+	}
+
+	if err := saveEncryptedFile(path, newEf); err != nil {
+		return nil, errors.Wrap(err, "save resolved file")
+	}
+
+	if err := gitCmd("add", base).Run(); err != nil {
+		return nil, errors.Wrap(err, "git add")
+	}
+
+	fmt.Fprintf(os.Stderr, "%s\n", successStyle.Render(
+		fmt.Sprintf("Auto-resolved merge conflict in %s (%d secrets, %d recipients).",
+			path, len(mergedSecrets), len(mergedRecipients))))
+
+	return newEf, nil
 }
 
 func tomlKey(s string) string {
@@ -640,7 +779,6 @@ func marshalEncryptedFile(ef *EncryptedFile) ([]byte, error) {
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "version = %d\n", ef.Version)
 	fmt.Fprintf(&buf, "mac = %q\n", ef.MAC)
-	fmt.Fprintf(&buf, "data_key = %q\n", ef.DataKey)
 
 	buf.WriteString("\n[recipients]\n")
 	for _, name := range sortedKeys(ef.Recipients) {
@@ -648,6 +786,14 @@ func marshalEncryptedFile(ef *EncryptedFile) ([]byte, error) {
 			return nil, errors.Wrapf(err, "recipient %q", name)
 		}
 		fmt.Fprintf(&buf, "%s = %q\n", tomlKey(name), ef.Recipients[name])
+	}
+
+	buf.WriteString("\n[wrapped_keys]\n")
+	for _, name := range sortedKeys(ef.WrappedKeys) {
+		if err := validateTOMLValue(ef.WrappedKeys[name]); err != nil {
+			return nil, errors.Wrapf(err, "wrapped key %q", name)
+		}
+		fmt.Fprintf(&buf, "%s = %q\n", tomlKey(name), ef.WrappedKeys[name])
 	}
 
 	buf.WriteString("\n[secrets]\n")
@@ -706,13 +852,7 @@ func encryptSecrets(secrets map[string]string, recipients map[string]string) (*E
 		return nil, err
 	}
 
-	pubKeys := make([]string, 0, len(recipients))
-	for _, pk := range recipients {
-		pubKeys = append(pubKeys, pk)
-	}
-	sort.Strings(pubKeys) // deterministic order for age encryption
-
-	wrappedKey, err := wrapDataKey(dataKey, pubKeys)
+	wrappedKeys, err := wrapDataKeyPerRecipient(dataKey, recipients)
 	if err != nil {
 		return nil, err
 	}
@@ -726,14 +866,14 @@ func encryptSecrets(secrets map[string]string, recipients map[string]string) (*E
 		encSecrets[k] = enc
 	}
 
-	mac := computeMAC(dataKey, fileVersion, wrappedKey, recipients, encSecrets)
+	mac := computeMAC(dataKey, fileVersion, wrappedKeys, recipients, encSecrets)
 
 	return &EncryptedFile{
-		Version:    fileVersion,
-		MAC:        mac,
-		DataKey:    wrappedKey,
-		Recipients: recipients,
-		Secrets:    encSecrets,
+		Version:     fileVersion,
+		MAC:         mac,
+		Recipients:  recipients,
+		WrappedKeys: wrappedKeys,
+		Secrets:     encSecrets,
 	}, nil
 }
 
@@ -748,14 +888,14 @@ func decryptSecrets(ef *EncryptedFile) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	found := false
-	for _, pk := range ef.Recipients {
+	var myRecipientName string
+	for name, pk := range ef.Recipients {
 		if pk == pubKey {
-			found = true
+			myRecipientName = name
 			break
 		}
 	}
-	if !found {
+	if myRecipientName == "" {
 		names := make([]string, 0, len(ef.Recipients))
 		for name := range ef.Recipients {
 			names = append(names, name)
@@ -765,13 +905,30 @@ func decryptSecrets(ef *EncryptedFile) (map[string]string, error) {
 			pubKey, strings.Join(names, ", "))
 	}
 
-	dataKey, err := unwrapDataKey(ef.DataKey, privKey)
-	if err != nil {
-		return nil, errors.Wrap(err, "decrypt data key")
+	var dataKey []byte
+	var expected string
+
+	if ef.Version == 1 {
+		// v1: single wrapped data key
+		dataKey, err = unwrapDataKey(ef.DataKey, privKey)
+		if err != nil {
+			return nil, errors.Wrap(err, "decrypt data key")
+		}
+		expected = computeMACv1(dataKey, ef.Version, ef.DataKey, ef.Recipients, ef.Secrets)
+	} else {
+		// v2: per-recipient wrapped keys
+		wrappedKey, ok := ef.WrappedKeys[myRecipientName]
+		if !ok {
+			return nil, errors.Newf("no wrapped key found for recipient %s", myRecipientName)
+		}
+		dataKey, err = unwrapDataKey(wrappedKey, privKey)
+		if err != nil {
+			return nil, errors.Wrap(err, "decrypt data key")
+		}
+		expected = computeMAC(dataKey, ef.Version, ef.WrappedKeys, ef.Recipients, ef.Secrets)
 	}
 
 	// Verify MAC
-	expected := computeMAC(dataKey, ef.Version, ef.DataKey, ef.Recipients, ef.Secrets)
 	if !hmac.Equal([]byte(expected), []byte(ef.MAC)) {
 		return nil, errors.New("MAC verification failed — file may be tampered")
 	}
@@ -794,26 +951,45 @@ func reWrapDataKey(ef *EncryptedFile, newRecipients map[string]string) error {
 		return err
 	}
 
-	dataKey, err := unwrapDataKey(ef.DataKey, privKey)
+	// Find our wrapped key (works for both v1 and v2)
+	var dataKey []byte
+	if ef.Version == 1 {
+		dataKey, err = unwrapDataKey(ef.DataKey, privKey)
+	} else {
+		pubKey, pubErr := publicKeyFrom(privKey)
+		if pubErr != nil {
+			return pubErr
+		}
+		var myName string
+		for name, pk := range ef.Recipients {
+			if pk == pubKey {
+				myName = name
+				break
+			}
+		}
+		if myName == "" {
+			return errors.New("your key is not in the recipients list")
+		}
+		wrappedKey, ok := ef.WrappedKeys[myName]
+		if !ok {
+			return errors.Newf("no wrapped key found for recipient %s", myName)
+		}
+		dataKey, err = unwrapDataKey(wrappedKey, privKey)
+	}
 	if err != nil {
 		return errors.Wrap(err, "decrypt data key")
 	}
 
-	pubKeys := make([]string, 0, len(newRecipients))
-	for _, pk := range newRecipients {
-		pubKeys = append(pubKeys, pk)
-	}
-	sort.Strings(pubKeys)
-
-	newWrapped, err := wrapDataKey(dataKey, pubKeys)
+	newWrappedKeys, err := wrapDataKeyPerRecipient(dataKey, newRecipients)
 	if err != nil {
 		return err
 	}
 
-	ef.DataKey = newWrapped
+	ef.DataKey = "" // clear v1 field
+	ef.WrappedKeys = newWrappedKeys
 	ef.Recipients = newRecipients
 	ef.Version = fileVersion
-	ef.MAC = computeMAC(dataKey, ef.Version, ef.DataKey, ef.Recipients, ef.Secrets)
+	ef.MAC = computeMAC(dataKey, ef.Version, ef.WrappedKeys, ef.Recipients, ef.Secrets)
 	return nil
 }
 
@@ -1483,6 +1659,183 @@ func cmdDoctor() error {
 		return errors.New("some checks failed")
 	}
 	return nil
+}
+
+// --- Merge Driver ---
+
+func mergeSecrets(ancestor, ours, theirs map[string]string) (map[string]string, []string, error) {
+	allKeys := make(map[string]bool)
+	for k := range ancestor {
+		allKeys[k] = true
+	}
+	for k := range ours {
+		allKeys[k] = true
+	}
+	for k := range theirs {
+		allKeys[k] = true
+	}
+
+	result := make(map[string]string)
+	var conflicts []string
+
+	for k := range allKeys {
+		aVal, aOK := ancestor[k]
+		oVal, oOK := ours[k]
+		tVal, tOK := theirs[k]
+
+		switch {
+		case oOK && tOK && oVal == tVal:
+			// both agree
+			result[k] = oVal
+		case !oOK && !tOK:
+			// both deleted
+		case oOK && !tOK && !aOK:
+			// added only in ours
+			result[k] = oVal
+		case !oOK && tOK && !aOK:
+			// added only in theirs
+			result[k] = tVal
+		case oOK && !tOK && aOK:
+			// theirs deleted
+			if oVal == aVal {
+				// ours unchanged, accept deletion
+			} else {
+				conflicts = append(conflicts, k)
+			}
+		case !oOK && tOK && aOK:
+			// ours deleted
+			if tVal == aVal {
+				// theirs unchanged, accept deletion
+			} else {
+				conflicts = append(conflicts, k)
+			}
+		case oOK && tOK && aOK:
+			if oVal == aVal {
+				// only theirs changed
+				result[k] = tVal
+			} else if tVal == aVal {
+				// only ours changed
+				result[k] = oVal
+			} else {
+				// both changed differently
+				conflicts = append(conflicts, k)
+			}
+		case oOK && tOK && !aOK:
+			// both added with different values
+			conflicts = append(conflicts, k)
+		default:
+			conflicts = append(conflicts, k)
+		}
+	}
+
+	sort.Strings(conflicts)
+	if len(conflicts) > 0 {
+		return nil, conflicts, errors.Newf("merge conflict on keys: %s", strings.Join(conflicts, ", "))
+	}
+	return result, nil, nil
+}
+
+func mergeStringMaps(ancestor, ours, theirs map[string]string) map[string]string {
+	result := make(map[string]string)
+	// Union of ours and theirs; if both added/kept, prefer ours
+	for k, v := range ours {
+		result[k] = v
+	}
+	for k, v := range theirs {
+		if _, ok := result[k]; !ok {
+			result[k] = v
+		}
+	}
+	// Handle deletions: if ancestor had it and one side removed it, remove it
+	for k := range ancestor {
+		_, inOurs := ours[k]
+		_, inTheirs := theirs[k]
+		if !inOurs || !inTheirs {
+			// one or both sides deleted it
+			if !inOurs && !inTheirs {
+				delete(result, k)
+			} else if !inOurs {
+				// ours deleted, theirs kept — accept deletion
+				delete(result, k)
+			} else {
+				// theirs deleted, ours kept — accept deletion
+				delete(result, k)
+			}
+		}
+	}
+	return result
+}
+
+func cmdMerge(ancestorPath, oursPath, theirsPath string) error {
+	ancestor, err := loadEncryptedFile(ancestorPath)
+	if err != nil {
+		return errors.Wrap(err, "load ancestor")
+	}
+	ours, err := loadEncryptedFile(oursPath)
+	if err != nil {
+		return errors.Wrap(err, "load ours")
+	}
+	theirs, err := loadEncryptedFile(theirsPath)
+	if err != nil {
+		return errors.Wrap(err, "load theirs")
+	}
+
+	// Decrypt all three
+	ancestorSecrets, err := decryptSecrets(ancestor)
+	if err != nil {
+		return errors.Wrap(err, "decrypt ancestor")
+	}
+	oursSecrets, err := decryptSecrets(ours)
+	if err != nil {
+		return errors.Wrap(err, "decrypt ours")
+	}
+	theirsSecrets, err := decryptSecrets(theirs)
+	if err != nil {
+		return errors.Wrap(err, "decrypt theirs")
+	}
+
+	// 3-way merge secrets
+	mergedSecrets, conflicts, err := mergeSecrets(ancestorSecrets, oursSecrets, theirsSecrets)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "shh merge: conflict on keys: %s\n", strings.Join(conflicts, ", "))
+		os.Exit(1)
+	}
+
+	// Merge recipients (union, with deletion support)
+	mergedRecipients := mergeStringMaps(ancestor.Recipients, ours.Recipients, theirs.Recipients)
+
+	// Re-encrypt with merged values
+	newEf, err := encryptSecrets(mergedSecrets, mergedRecipients)
+	if err != nil {
+		return errors.Wrap(err, "re-encrypt merged secrets")
+	}
+
+	// Write result to the "ours" path (git convention)
+	if err := saveEncryptedFile(oursPath, newEf); err != nil {
+		return errors.Wrap(err, "save merged file")
+	}
+
+	return nil
+}
+
+func loadEncryptedFileFromBytes(data []byte) (*EncryptedFile, error) {
+	var ef EncryptedFile
+	if _, err := toml.Decode(string(data), &ef); err != nil {
+		return nil, errors.Wrap(err, "parse encrypted file")
+	}
+	if ef.Version != 1 && ef.Version != 2 {
+		return nil, errors.Newf("unsupported file version: %d (expected 1 or 2)", ef.Version)
+	}
+	if ef.Recipients == nil {
+		ef.Recipients = make(map[string]string)
+	}
+	if ef.WrappedKeys == nil {
+		ef.WrappedKeys = make(map[string]string)
+	}
+	if ef.Secrets == nil {
+		ef.Secrets = make(map[string]string)
+	}
+	return &ef, nil
 }
 
 // --- Key Management ---
