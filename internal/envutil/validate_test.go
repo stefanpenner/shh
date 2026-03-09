@@ -72,6 +72,36 @@ func TestGithubUsernameValidation(t *testing.T) {
 	}
 }
 
+func TestValidateEnvName(t *testing.T) {
+	tests := []struct {
+		name    string
+		envName string
+		wantErr bool
+	}{
+		{"simple", "production", false},
+		{"with hyphen", "my-env", false},
+		{"with underscore", "my_env", false},
+		{"alphanumeric", "env1", false},
+		{"path traversal dotdot", "..", true},
+		{"path traversal slash", "../etc/passwd", true},
+		{"forward slash", "prod/secrets", true},
+		{"backslash", `prod\secrets`, true},
+		{"leading dot", ".hidden", true},
+		{"empty string", "", true},
+		{"spaces", "my env", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateEnvName(tt.envName)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestDangerousEnvVarDenylist(t *testing.T) {
 	blocked := []string{"PATH", "HOME", "SHELL", "USER", "LOGNAME",
 		"LD_PRELOAD", "LD_LIBRARY_PATH",
