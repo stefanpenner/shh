@@ -51,6 +51,17 @@ func ResolveFile(envName string, args []string) string {
 	return FileArg(args)
 }
 
+// ResolveFileE is like ResolveFile but validates the env name to prevent path traversal.
+func ResolveFileE(envName string, args []string) (string, error) {
+	if envName != "" {
+		if err := ValidateEnvName(envName); err != nil {
+			return "", err
+		}
+		return EnvFlag(envName), nil
+	}
+	return FileArg(args), nil
+}
+
 func CurrentUsername() string {
 	if u, err := user.Current(); err == nil {
 		return u.Username
