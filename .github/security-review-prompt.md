@@ -32,3 +32,21 @@ Also research recent CVEs in the dependency tree (age, sops,
 ssh-to-age, cobra) and flag any that apply.
 
 Be adversarial — think like an attacker targeting this tool.
+
+## Fix and open a PR
+
+After completing the audit, if you find any Medium or higher severity
+issues that you can confidently fix:
+
+1. Create a new branch named `security/fix-<short-description>`
+2. Apply the fixes, keeping changes minimal and focused
+3. Run `go vet ./...` and `go test -race ./...` to verify nothing breaks
+4. Commit with a clear message explaining the security issue and fix
+5. Push the branch and open a pull request with:
+   - Title prefixed with `security:`
+   - Body containing the finding details (severity, description, attack
+     scenario) and explanation of the fix
+   - Label: `security`
+
+If there are no fixable findings, skip the PR and just report the audit
+results. Do not open a PR for Low/Info findings or speculative issues.
