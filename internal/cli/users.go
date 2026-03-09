@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 
+	"filippo.io/age"
 	"github.com/cockroachdb/errors"
 
 	"github.com/stefanpenner/shh/internal/encfile"
@@ -12,6 +13,8 @@ import (
 	"github.com/stefanpenner/shh/internal/github"
 	"github.com/stefanpenner/shh/internal/keyring"
 )
+
+const shhUserPrefix = "shh-user://"
 
 func usersListCmd() error {
 	file := envutil.FindEncFile()
@@ -39,11 +42,42 @@ func usersListCmd() error {
 	return nil
 }
 
-func usersAddCmd(args []string) error {
-	newKey, name, err := github.ResolveUserKey(args[0])
-	if err != nil {
-		return err
+func usersAddCmd(args []string, deployName, deployKey string) error {
+	var newKey, name string
+	var err error
+
+	if deployName != "" {
+		// Deploy key mode: --name provided
+		name = shhUserPrefix + deployName
+		if deployKey != "" {
+			// User provided a key
+			if !envutil.AgeKeyPattern.MatchString(deployKey) {
+				return errors.Newf("invalid age public key: %q", deployKey)
+			}
+			newKey = deployKey
+		} else {
+			// Generate a new keypair
+			identity, err := age.GenerateX25519Identity()
+			if err != nil {
+				return errors.Wrap(err, "generate age key")
+			}
+			newKey = identity.Recipient().String()
+			fmt.Println(hintStyle.Render("Secret key (store this in your CI/deploy platform as SHH_AGE_KEY):"))
+			fmt.Println()
+			fmt.Printf("  SHH_AGE_KEY=%s\n", identity.String())
+			fmt.Println()
+			fmt.Println(hintStyle.Render("This is the only time this key will be displayed."))
+		}
+	} else if len(args) > 0 {
+		// GitHub / raw age key mode (existing behavior)
+		newKey, name, err = github.ResolveUserKey(args[0])
+		if err != nil {
+			return err
+		}
+	} else {
+		return errors.New("provide a GitHub username, age public key, or use --name for deploy keys")
 	}
+
 	file := envutil.FindEncFile()
 	var ef *encfile.EncryptedFile
 
