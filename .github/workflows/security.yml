@@ -1,6 +1,7 @@
 name: Security
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -36,7 +37,7 @@ jobs:
 
   ai-security-review:
     runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' || github.event_name == 'pull_request'
+    if: github.event_name == 'schedule' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: read
       issues: write
