@@ -27,6 +27,16 @@ func cmdEncrypt(src string) error {
 
 	secrets := encfile.ParsePlaintext(string(plaintext))
 
+	// Validate key names to match the same rules enforced by cmdEdit and cmdSet.
+	for k := range secrets {
+		if !envutil.EnvVarKeyPattern.MatchString(k) {
+			return errors.Newf("invalid key name %q (must match [A-Za-z_][A-Za-z0-9_]*)", k)
+		}
+		if envutil.DangerousEnvVars[k] {
+			return errors.Newf("setting %q is not allowed (dangerous environment variable)", k)
+		}
+	}
+
 	privKey, err := keyring.GetKey()
 	if err != nil {
 		return err
