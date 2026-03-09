@@ -7,8 +7,7 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    - cron: "0 6 * * 1" # Every Monday at 06:00 UTC
-
+    - cron: "0 6 * * *" # Every day at 06:00 UTC
 jobs:
   scan:
     runs-on: ubuntu-latest
