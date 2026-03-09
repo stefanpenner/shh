@@ -3,6 +3,7 @@
 Commit your secrets. Yes, really.
 
 Encrypted secrets live in your repo, safe to push, easy to share.
+
 Add teammates by GitHub username — `shh users add alice` fetches their SSH key automatically.
 
 No GitHub? Pass an [age](https://github.com/FiloSottile/age) key directly.
