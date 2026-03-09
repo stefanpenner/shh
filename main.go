@@ -2,37 +2,41 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"filippo.io/age"
-	"github.com/zalando/go-keyring"
 	sshtoa "github.com/Mic92/ssh-to-age"
+	"github.com/BurntSushi/toml"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/cockroachdb/errors"
-	"github.com/getsops/sops/v3"
-	"github.com/getsops/sops/v3/aes"
-	sopsage "github.com/getsops/sops/v3/age"
-	"github.com/getsops/sops/v3/keyservice"
-	"github.com/getsops/sops/v3/stores/dotenv"
 	"github.com/spf13/cobra"
+	"github.com/zalando/go-keyring"
 )
 
 const (
-	keychainService    = "shh-age-key"
-	sopsConfigFile     = ".sops.yaml"
-	keyRegistryFile    = ".age-keys"
+	keychainService      = "shh-age-key"
 	defaultEncryptedFile = ".env.enc"
+	fileVersion          = 1
 )
 
 // --- Lipgloss Styles ---
@@ -48,7 +52,8 @@ var (
 
 	// Validation patterns
 	ageKeyPattern     = regexp.MustCompile(`^age1[a-z0-9]{58}$`)
-	githubUserPattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$`)
+	githubUserPattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$`)
+	envVarKeyPattern  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 	// HTTP client with timeout and no redirects to untrusted hosts
 	httpClient = &http.Client{
@@ -68,12 +73,22 @@ var (
 	maxResponseSize int64 = 1 << 20
 )
 
+// --- Encrypted File Format ---
+
+type EncryptedFile struct {
+	Version    int               `toml:"version"`
+	MAC        string            `toml:"mac"`
+	DataKey    string            `toml:"data_key"`
+	Recipients map[string]string `toml:"recipients"`
+	Secrets    map[string]string `toml:"secrets"`
+}
+
 // --- Cobra Commands ---
 
 func newRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "shh",
-		Short: "Encrypted .env management with age+sops+Keychain",
+		Short: "Encrypted .env management with age encryption",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -81,11 +96,20 @@ func newRootCmd() *cobra.Command {
 	// init command
 	initCmd := &cobra.Command{
 		Use:   "init",
-		Short: "Generate age key and store in Keychain",
+		Short: "Generate age key and store in OS keyring",
 		RunE:  runInit,
 	}
 	initCmd.Flags().String("from-ssh", "", "Derive age key from SSH ed25519 key (optionally specify path)")
 	rootCmd.AddCommand(initCmd)
+
+	// logout command
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "logout",
+		Short: "Remove age key from OS keyring",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdLogout()
+		},
+	})
 
 	// encrypt command
 	rootCmd.AddCommand(&cobra.Command{
@@ -97,13 +121,23 @@ func newRootCmd() *cobra.Command {
 		},
 	})
 
-	// decrypt command
+	// list command
 	rootCmd.AddCommand(&cobra.Command{
-		Use:   "decrypt [file]",
-		Short: "Print decrypted contents",
+		Use:   "list [file]",
+		Short: "List secret keys (names only, no values)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdDecrypt(fileArg(args))
+			return cmdList(fileArg(args))
+		},
+	})
+
+	// env command
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "env [file]",
+		Short: "Print secrets as export statements",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdEnv(fileArg(args))
 		},
 	})
 
@@ -228,10 +262,44 @@ func currentUsername() string {
 	return os.Getenv("USER")
 }
 
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func filterEnv(env []string, remove ...string) []string {
+	var filtered []string
+	for _, e := range env {
+		skip := false
+		for _, r := range remove {
+			if strings.HasPrefix(e, r+"=") {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered
+}
+
 // --- Keyring ---
 
+func cmdLogout() error {
+	err := keyring.Delete(keychainService, currentUsername())
+	if err != nil {
+		return errors.New("no key found in keyring")
+	}
+	fmt.Println(successStyle.Render("Age key removed from OS keyring."))
+	return nil
+}
+
 func getKey() (string, error) {
-	// Allow env var override (for CI, Docker, headless environments)
 	if key := os.Getenv("SHH_AGE_KEY"); key != "" {
 		return key, nil
 	}
@@ -254,291 +322,348 @@ func publicKeyFrom(privateKey string) (string, error) {
 	return identity.Recipient().String(), nil
 }
 
-// --- Key Registry ---
+// --- Crypto Layer ---
 
-func keyName(pubKey string) string {
-	data, err := os.ReadFile(keyRegistryFile)
-	if err != nil {
-		return ""
+func generateDataKey() ([]byte, error) {
+	key := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, key); err != nil {
+		return nil, errors.Wrap(err, "generate data key")
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.Contains(line, pubKey) {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				return parts[1]
-			}
-		}
-	}
-	return ""
+	return key, nil
 }
 
-func registerKey(pubKey, name string) error {
-	// Sanitize name: no newlines or control characters
-	name = strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\r' || r < 32 {
-			return -1
-		}
-		return r
-	}, name)
-	name = strings.TrimSpace(name)
-
-	// Read existing, remove old entry for this key
-	var lines []string
-	if data, err := os.ReadFile(keyRegistryFile); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			if line != "" && !strings.Contains(line, pubKey) {
-				lines = append(lines, line)
-			}
-		}
+func encryptValue(dataKey []byte, plaintext string) (string, error) {
+	block, err := aes.NewCipher(dataKey)
+	if err != nil {
+		return "", errors.Wrap(err, "create cipher")
 	}
-	lines = append(lines, pubKey+" "+name)
-	return os.WriteFile(keyRegistryFile, []byte(strings.Join(lines, "\n")+"\n"), 0644)
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", errors.Wrap(err, "create GCM")
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", errors.Wrap(err, "generate nonce")
+	}
+	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
-// --- SOPS helpers ---
-
-func sopsKeysFromConfig() ([]string, error) {
-	data, err := os.ReadFile(sopsConfigFile)
+func decryptValue(dataKey []byte, encoded string) (string, error) {
+	data, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return nil, errors.Newf("no %s found", sopsConfigFile)
+		return "", errors.Wrap(err, "base64 decode")
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "- age:") || strings.HasPrefix(line, "age:") {
-			raw := strings.TrimPrefix(line, "- age:")
-			raw = strings.TrimPrefix(raw, "age:")
-			raw = strings.TrimSpace(raw)
-			raw = strings.Trim(raw, "\"")
-			return strings.Split(raw, ","), nil
-		}
-	}
-	return nil, errors.Newf("no age keys found in %s", sopsConfigFile)
-}
-
-func writeSopsConfig(keys []string) error {
-	content := fmt.Sprintf("creation_rules:\n  - age: \"%s\"\n", strings.Join(keys, ","))
-	return os.WriteFile(sopsConfigFile, []byte(content), 0644)
-}
-
-// setAgeKeyEnv sets the SOPS_AGE_KEY environment variable for sops library operations.
-// If the env var is already set (e.g. in tests), it is left untouched.
-func setAgeKeyEnv() (cleanup func(), err error) {
-	if os.Getenv(sopsage.SopsAgeKeyEnv) != "" {
-		return func() {}, nil
-	}
-	key, err := getKey()
+	block, err := aes.NewCipher(dataKey)
 	if err != nil {
-		return nil, err
+		return "", errors.Wrap(err, "create cipher")
 	}
-	os.Setenv(sopsage.SopsAgeKeyEnv, key)
-	return func() { os.Unsetenv(sopsage.SopsAgeKeyEnv) }, nil
-}
-
-func newDotenvStore() *dotenv.Store {
-	return &dotenv.Store{}
-}
-
-func sopsDecrypt(file string) (string, error) {
-	cleanup, err := setAgeKeyEnv()
+	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return "", err
+		return "", errors.Wrap(err, "create GCM")
 	}
-	defer cleanup()
-
-	data, err := os.ReadFile(file)
+	nonceSize := gcm.NonceSize()
+	if len(data) < nonceSize {
+		return "", errors.New("ciphertext too short")
+	}
+	plaintext, err := gcm.Open(nil, data[:nonceSize], data[nonceSize:], nil)
 	if err != nil {
-		return "", errors.Wrap(err, "read file")
-	}
-
-	store := newDotenvStore()
-	tree, err := store.LoadEncryptedFile(data)
-	if err != nil {
-		return "", errors.Wrap(err, "sops load encrypted file")
-	}
-
-	dataKey, err := tree.Metadata.GetDataKey()
-	if err != nil {
-		return "", errors.Wrap(err, "sops get data key")
-	}
-
-	cipher := aes.NewCipher()
-	mac, err := tree.Decrypt(dataKey, cipher)
-	if err != nil {
-		return "", errors.Wrap(err, "sops decrypt")
-	}
-
-	// Verify MAC
-	originalMac, err := cipher.Decrypt(
-		tree.Metadata.MessageAuthenticationCode,
-		dataKey,
-		tree.Metadata.LastModified.Format(time.RFC3339),
-	)
-	if err != nil {
-		return "", errors.Wrap(err, "sops decrypt MAC")
-	}
-	if originalMac != mac {
-		return "", errors.Newf("MAC mismatch: expected %q, got %q", originalMac, mac)
-	}
-
-	plaintext, err := store.EmitPlainFile(tree.Branches)
-	if err != nil {
-		return "", errors.Wrap(err, "sops emit plain file")
+		return "", errors.Wrap(err, "decrypt")
 	}
 	return string(plaintext), nil
 }
 
-func sopsEncrypt(plaintext, file string) error {
-	cleanup, err := setAgeKeyEnv()
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-
-	store := newDotenvStore()
-	branches, err := store.LoadPlainFile([]byte(plaintext))
-	if err != nil {
-		return errors.Wrap(err, "parse dotenv")
-	}
-
-	// Read recipients from .sops.yaml
-	recipients, err := sopsKeysFromConfig()
-	if err != nil {
-		return err
-	}
-
-	// Create age master keys
-	var ageKeys sops.KeyGroup
-	for _, r := range recipients {
-		mk, err := sopsage.MasterKeyFromRecipient(r)
+func wrapDataKey(dataKey []byte, recipientKeys []string) (string, error) {
+	var recipients []age.Recipient
+	for _, r := range recipientKeys {
+		rec, err := age.ParseX25519Recipient(r)
 		if err != nil {
-			return errors.Wrapf(err, "parse recipient %s", r)
+			return "", errors.Wrapf(err, "parse recipient %s", r)
 		}
-		ageKeys = append(ageKeys, mk)
+		recipients = append(recipients, rec)
 	}
-
-	tree := sops.Tree{
-		Branches: branches,
-		Metadata: sops.Metadata{
-			KeyGroups: []sops.KeyGroup{ageKeys},
-			Version:   "3.9.0",
-		},
-	}
-
-	dataKey, errs := tree.GenerateDataKeyWithKeyServices(
-		[]keyservice.KeyServiceClient{keyservice.NewLocalClient()},
-	)
-	if len(errs) > 0 {
-		return errors.Wrap(errs[0], "generate data key")
-	}
-
-	cipher := aes.NewCipher()
-	unencryptedMac, err := tree.Encrypt(dataKey, cipher)
+	var buf bytes.Buffer
+	w, err := age.Encrypt(&buf, recipients...)
 	if err != nil {
-		return errors.Wrap(err, "encrypt tree")
+		return "", errors.Wrap(err, "age encrypt")
 	}
-
-	tree.Metadata.LastModified = time.Now().UTC()
-	tree.Metadata.MessageAuthenticationCode, err = cipher.Encrypt(
-		unencryptedMac, dataKey, tree.Metadata.LastModified.Format(time.RFC3339),
-	)
-	if err != nil {
-		return errors.Wrap(err, "encrypt MAC")
+	if _, err := w.Write(dataKey); err != nil {
+		return "", errors.Wrap(err, "write data key")
 	}
-
-	output, err := store.EmitEncryptedFile(tree)
-	if err != nil {
-		return errors.Wrap(err, "emit encrypted file")
+	if err := w.Close(); err != nil {
+		return "", errors.Wrap(err, "close age writer")
 	}
-
-	return os.WriteFile(file, output, 0600)
+	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
 }
 
-func sopsUpdateKeys(file string) error {
-	cleanup, err := setAgeKeyEnv()
+func unwrapDataKey(wrapped string, privateKey string) ([]byte, error) {
+	data, err := base64.StdEncoding.DecodeString(wrapped)
 	if err != nil {
-		return err
+		return nil, errors.Wrap(err, "base64 decode data key")
 	}
-	defer cleanup()
-
-	store := newDotenvStore()
-
-	data, err := os.ReadFile(file)
+	identity, err := age.ParseX25519Identity(privateKey)
 	if err != nil {
-		return errors.Wrap(err, "read file")
+		return nil, errors.Wrap(err, "parse age identity")
 	}
-	tree, err := store.LoadEncryptedFile(data)
+	r, err := age.Decrypt(bytes.NewReader(data), identity)
 	if err != nil {
-		return errors.Wrap(err, "load encrypted file")
+		return nil, errors.Wrap(err, "age decrypt data key")
 	}
-
-	// Read new recipients from .sops.yaml
-	recipients, err := sopsKeysFromConfig()
-	if err != nil {
-		return err
-	}
-
-	// Create new key groups
-	var ageKeys sops.KeyGroup
-	for _, r := range recipients {
-		mk, err := sopsage.MasterKeyFromRecipient(r)
-		if err != nil {
-			return errors.Wrapf(err, "parse recipient %s", r)
-		}
-		ageKeys = append(ageKeys, mk)
-	}
-
-	// Get the data key using current master keys
-	dataKey, err := tree.Metadata.GetDataKeyWithKeyServices(
-		[]keyservice.KeyServiceClient{keyservice.NewLocalClient()},
-		nil,
-	)
-	if err != nil {
-		return errors.Wrap(err, "get data key")
-	}
-
-	// Update to new key groups and re-encrypt the data key
-	tree.Metadata.KeyGroups = []sops.KeyGroup{ageKeys}
-	updateErrs := tree.Metadata.UpdateMasterKeysWithKeyServices(
-		dataKey,
-		[]keyservice.KeyServiceClient{keyservice.NewLocalClient()},
-	)
-	if len(updateErrs) > 0 {
-		return errors.Wrap(updateErrs[0], "update master keys")
-	}
-
-	output, err := store.EmitEncryptedFile(tree)
-	if err != nil {
-		return errors.Wrap(err, "emit encrypted file")
-	}
-
-	return os.WriteFile(file, output, 0600)
+	return io.ReadAll(r)
 }
 
-// --- Dotenv helpers ---
+func computeMAC(dataKey []byte, secrets map[string]string) string {
+	mac := hmac.New(sha256.New, dataKey)
+	for _, k := range sortedKeys(secrets) {
+		mac.Write([]byte(k))
+		mac.Write([]byte{0})
+		mac.Write([]byte(secrets[k]))
+		mac.Write([]byte{0})
+	}
+	return fmt.Sprintf("%x", mac.Sum(nil))
+}
 
-func parseDotenv(content string) []string {
-	var lines []string
+// --- File I/O ---
+
+func loadEncryptedFile(path string) (*EncryptedFile, error) {
+	var ef EncryptedFile
+	if _, err := toml.DecodeFile(path, &ef); err != nil {
+		return nil, errors.Wrap(err, "parse encrypted file")
+	}
+	if ef.Version != fileVersion {
+		return nil, errors.Newf("unsupported file version: %d (expected %d)", ef.Version, fileVersion)
+	}
+	if ef.Recipients == nil {
+		ef.Recipients = make(map[string]string)
+	}
+	if ef.Secrets == nil {
+		ef.Secrets = make(map[string]string)
+	}
+	return &ef, nil
+}
+
+func tomlKey(s string) string {
+	if s == "" {
+		return `""`
+	}
+	for _, c := range s {
+		if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+			return fmt.Sprintf("%q", s)
+		}
+	}
+	return s
+}
+
+func marshalEncryptedFile(ef *EncryptedFile) []byte {
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "version = %d\n", ef.Version)
+	fmt.Fprintf(&buf, "mac = %q\n", ef.MAC)
+	fmt.Fprintf(&buf, "data_key = %q\n", ef.DataKey)
+
+	buf.WriteString("\n[recipients]\n")
+	for _, name := range sortedKeys(ef.Recipients) {
+		fmt.Fprintf(&buf, "%s = %q\n", tomlKey(name), ef.Recipients[name])
+	}
+
+	buf.WriteString("\n[secrets]\n")
+	for _, k := range sortedKeys(ef.Secrets) {
+		fmt.Fprintf(&buf, "%s = %q\n", tomlKey(k), ef.Secrets[k])
+	}
+
+	return buf.Bytes()
+}
+
+func saveEncryptedFile(path string, ef *EncryptedFile) error {
+	data := marshalEncryptedFile(ef)
+
+	dir := filepath.Dir(path)
+	if dir == "" {
+		dir = "."
+	}
+	tmp, err := os.CreateTemp(dir, ".shh-*.tmp")
+	if err != nil {
+		return errors.Wrap(err, "create temp file")
+	}
+	tmpName := tmp.Name()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return errors.Wrap(err, "write temp file")
+	}
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return errors.Wrap(err, "chmod temp file")
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return errors.Wrap(err, "close temp file")
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return errors.Wrap(err, "rename temp file")
+	}
+	return nil
+}
+
+// --- Encrypt / Decrypt ---
+
+func encryptSecrets(secrets map[string]string, recipients map[string]string) (*EncryptedFile, error) {
+	dataKey, err := generateDataKey()
+	if err != nil {
+		return nil, err
+	}
+
+	pubKeys := make([]string, 0, len(recipients))
+	for _, pk := range recipients {
+		pubKeys = append(pubKeys, pk)
+	}
+	sort.Strings(pubKeys) // deterministic order for age encryption
+
+	wrappedKey, err := wrapDataKey(dataKey, pubKeys)
+	if err != nil {
+		return nil, err
+	}
+
+	encSecrets := make(map[string]string, len(secrets))
+	for k, v := range secrets {
+		enc, err := encryptValue(dataKey, v)
+		if err != nil {
+			return nil, errors.Wrapf(err, "encrypt %s", k)
+		}
+		encSecrets[k] = enc
+	}
+
+	mac := computeMAC(dataKey, encSecrets)
+
+	return &EncryptedFile{
+		Version:    fileVersion,
+		MAC:        mac,
+		DataKey:    wrappedKey,
+		Recipients: recipients,
+		Secrets:    encSecrets,
+	}, nil
+}
+
+func decryptSecrets(ef *EncryptedFile) (map[string]string, error) {
+	privKey, err := getKey()
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if our key is in the recipients list
+	pubKey, err := publicKeyFrom(privKey)
+	if err != nil {
+		return nil, err
+	}
+	found := false
+	for _, pk := range ef.Recipients {
+		if pk == pubKey {
+			found = true
+			break
+		}
+	}
+	if !found {
+		names := make([]string, 0, len(ef.Recipients))
+		for name := range ef.Recipients {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		return nil, errors.Newf("your key (%s) is not in the recipients list\n  authorized: %s\n  ask a teammate to run: shh keys add %s",
+			pubKey, strings.Join(names, ", "), pubKey)
+	}
+
+	dataKey, err := unwrapDataKey(ef.DataKey, privKey)
+	if err != nil {
+		return nil, errors.Wrap(err, "decrypt data key")
+	}
+
+	// Verify MAC
+	expected := computeMAC(dataKey, ef.Secrets)
+	if !hmac.Equal([]byte(expected), []byte(ef.MAC)) {
+		return nil, errors.New("MAC verification failed — file may be tampered")
+	}
+
+	secrets := make(map[string]string, len(ef.Secrets))
+	for k, v := range ef.Secrets {
+		dec, err := decryptValue(dataKey, v)
+		if err != nil {
+			return nil, errors.Wrapf(err, "decrypt %s", k)
+		}
+		secrets[k] = dec
+	}
+
+	return secrets, nil
+}
+
+func reWrapDataKey(ef *EncryptedFile, newRecipients map[string]string) error {
+	privKey, err := getKey()
+	if err != nil {
+		return err
+	}
+
+	dataKey, err := unwrapDataKey(ef.DataKey, privKey)
+	if err != nil {
+		return errors.Wrap(err, "decrypt data key")
+	}
+
+	pubKeys := make([]string, 0, len(newRecipients))
+	for _, pk := range newRecipients {
+		pubKeys = append(pubKeys, pk)
+	}
+	sort.Strings(pubKeys)
+
+	newWrapped, err := wrapDataKey(dataKey, pubKeys)
+	if err != nil {
+		return err
+	}
+
+	ef.DataKey = newWrapped
+	ef.Recipients = newRecipients
+	return nil
+}
+
+// --- Plaintext helpers ---
+
+func parsePlaintext(content string) map[string]string {
+	m := make(map[string]string)
 	scanner := bufio.NewScanner(strings.NewReader(content))
 	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
-	return lines
-}
-
-func dotenvGet(lines []string, key string) (int, bool) {
-	prefix := key + "="
-	for i, line := range lines {
-		if strings.HasPrefix(line, prefix) {
-			return i, true
+		line := scanner.Text()
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if idx := strings.IndexByte(line, '='); idx >= 0 {
+			m[line[:idx]] = line[idx+1:]
 		}
 	}
-	return -1, false
+	return m
+}
+
+func formatPlaintext(secrets map[string]string) string {
+	var buf strings.Builder
+	for _, k := range sortedKeys(secrets) {
+		fmt.Fprintf(&buf, "%s=%s\n", k, secrets[k])
+	}
+	return buf.String()
+}
+
+func defaultRecipients() (map[string]string, error) {
+	privKey, err := getKey()
+	if err != nil {
+		return nil, err
+	}
+	pubKey, err := publicKeyFrom(privKey)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{currentUsername(): pubKey}, nil
 }
 
 // --- Commands ---
 
 func runInit(cmd *cobra.Command, args []string) error {
-	// Already initialized?
 	if key, err := getKey(); err == nil {
 		pubKey, err := publicKeyFrom(key)
 		if err != nil {
@@ -580,13 +705,11 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	if err := storeKey(privateKey); err != nil {
-		return errors.Wrap(err, "keychain store")
+		return errors.Wrap(err, "keyring store")
 	}
 
 	username := currentUsername()
-	registerKey(publicKey, username)
-
-	fmt.Println(successStyle.Render("Age key stored in macOS Keychain."))
+	fmt.Println(successStyle.Render("Age key stored in OS keyring."))
 	fmt.Println()
 	fmt.Println("Your public key:")
 	fmt.Printf("  %s\n", keyStyle.Render(publicKey))
@@ -600,18 +723,30 @@ func cmdEncrypt(src string) error {
 		return errors.Newf("file not found: %s", src)
 	}
 
-	if err := ensureSopsConfig(); err != nil {
-		return err
-	}
-
-	// Read the source file and encrypt it
 	plaintext, err := os.ReadFile(src)
 	if err != nil {
 		return errors.Wrap(err, "read file")
 	}
 
+	secrets := parsePlaintext(string(plaintext))
+
+	recipients, err := defaultRecipients()
+	if err != nil {
+		return err
+	}
+
+	// If .env.enc already exists, preserve its recipients
 	dest := src + ".enc"
-	if err := sopsEncrypt(string(plaintext), dest); err != nil {
+	if existing, err := loadEncryptedFile(dest); err == nil {
+		recipients = existing.Recipients
+	}
+
+	ef, err := encryptSecrets(secrets, recipients)
+	if err != nil {
+		return err
+	}
+
+	if err := saveEncryptedFile(dest, ef); err != nil {
 		return err
 	}
 
@@ -620,39 +755,54 @@ func cmdEncrypt(src string) error {
 	return nil
 }
 
-func cmdDecrypt(file string) error {
-	plaintext, err := sopsDecrypt(file)
+func cmdList(file string) error {
+	ef, err := loadEncryptedFile(file)
 	if err != nil {
 		return err
 	}
-	fmt.Print(plaintext)
+	secrets, err := decryptSecrets(ef)
+	if err != nil {
+		return err
+	}
+	for _, k := range sortedKeys(secrets) {
+		fmt.Println(k)
+	}
 	return nil
 }
 
-func ensureSopsConfig() error {
-	if _, err := os.Stat(sopsConfigFile); os.IsNotExist(err) {
-		key, err := getKey()
-		if err != nil {
-			return err
-		}
-		pubKey, err := publicKeyFrom(key)
-		if err != nil {
-			return err
-		}
-		if err := writeSopsConfig([]string{pubKey}); err != nil {
-			return err
-		}
-		registerKey(pubKey, currentUsername())
+func cmdEnv(file string) error {
+	ef, err := loadEncryptedFile(file)
+	if err != nil {
+		return err
+	}
+	secrets, err := decryptSecrets(ef)
+	if err != nil {
+		return err
+	}
+	for _, k := range sortedKeys(secrets) {
+		fmt.Printf("export %s=%q\n", k, secrets[k])
 	}
 	return nil
 }
 
 func cmdEdit(file string) error {
+	var secrets map[string]string
+	var recipients map[string]string
 
-	// Decrypt existing file, or start empty for new files
-	var plaintext string
 	if _, err := os.Stat(file); err == nil {
-		plaintext, err = sopsDecrypt(file)
+		ef, err := loadEncryptedFile(file)
+		if err != nil {
+			return err
+		}
+		secrets, err = decryptSecrets(ef)
+		if err != nil {
+			return err
+		}
+		recipients = ef.Recipients
+	} else {
+		secrets = make(map[string]string)
+		var err error
+		recipients, err = defaultRecipients()
 		if err != nil {
 			return err
 		}
@@ -666,19 +816,27 @@ func cmdEdit(file string) error {
 	tmpPath := tmpFile.Name()
 	defer os.Remove(tmpPath)
 
-	if _, err := tmpFile.WriteString(plaintext); err != nil {
+	// Signal handler to clean up temp file
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		os.Remove(tmpPath)
+		os.Exit(1)
+	}()
+	defer signal.Stop(sigCh)
+
+	if _, err := tmpFile.WriteString(formatPlaintext(secrets)); err != nil {
 		tmpFile.Close()
 		return errors.Wrap(err, "write temp file")
 	}
 	tmpFile.Close()
 
-	// Get file info for modification time check
 	infoBefore, err := os.Stat(tmpPath)
 	if err != nil {
 		return err
 	}
 
-	// Open $EDITOR
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
 		editor = "vi"
@@ -687,11 +845,11 @@ func cmdEdit(file string) error {
 	editorCmd.Stdin = os.Stdin
 	editorCmd.Stdout = os.Stdout
 	editorCmd.Stderr = os.Stderr
+	editorCmd.Env = filterEnv(os.Environ(), "SHH_AGE_KEY")
 	if err := editorCmd.Run(); err != nil {
 		return errors.Wrap(err, "editor")
 	}
 
-	// Check if the file was modified
 	infoAfter, err := os.Stat(tmpPath)
 	if err != nil {
 		return err
@@ -701,68 +859,87 @@ func cmdEdit(file string) error {
 		return nil
 	}
 
-	// Re-read and re-encrypt
 	edited, err := os.ReadFile(tmpPath)
 	if err != nil {
 		return errors.Wrap(err, "read edited file")
 	}
 
-	if err := ensureSopsConfig(); err != nil {
+	newSecrets := parsePlaintext(string(edited))
+
+	ef, err := encryptSecrets(newSecrets, recipients)
+	if err != nil {
 		return err
 	}
-	return sopsEncrypt(string(edited), file)
+	return saveEncryptedFile(file, ef)
 }
 
 func cmdSet(file, key, value string) error {
+	if !envVarKeyPattern.MatchString(key) {
+		return errors.Newf("invalid key name %q (must match [A-Za-z_][A-Za-z0-9_]*)", key)
+	}
 
-	var plaintext string
+	var secrets map[string]string
+	var recipients map[string]string
+
 	if _, err := os.Stat(file); err == nil {
-		var decErr error
-		plaintext, decErr = sopsDecrypt(file)
-		if decErr != nil {
-			return decErr
+		ef, err := loadEncryptedFile(file)
+		if err != nil {
+			return err
+		}
+		secrets, err = decryptSecrets(ef)
+		if err != nil {
+			return err
+		}
+		recipients = ef.Recipients
+	} else {
+		secrets = make(map[string]string)
+		var err error
+		recipients, err = defaultRecipients()
+		if err != nil {
+			return err
 		}
 	}
 
-	if err := ensureSopsConfig(); err != nil {
+	_, existed := secrets[key]
+	secrets[key] = value
+
+	ef, err := encryptSecrets(secrets, recipients)
+	if err != nil {
+		return err
+	}
+	if err := saveEncryptedFile(file, ef); err != nil {
 		return err
 	}
 
-	lines := parseDotenv(plaintext)
-	newLine := key + "=" + value
-
-	if idx, found := dotenvGet(lines, key); found {
-		lines[idx] = newLine
+	if existed {
 		fmt.Println(successStyle.Render(fmt.Sprintf("Updated %s in %s.", key, file)))
 	} else {
-		lines = append(lines, newLine)
 		fmt.Println(successStyle.Render(fmt.Sprintf("Added %s to %s.", key, file)))
 	}
-
-	return sopsEncrypt(strings.Join(lines, "\n")+"\n", file)
+	return nil
 }
 
 func cmdRm(file, key string) error {
-
-	plaintext, err := sopsDecrypt(file)
+	ef, err := loadEncryptedFile(file)
+	if err != nil {
+		return err
+	}
+	secrets, err := decryptSecrets(ef)
 	if err != nil {
 		return err
 	}
 
-	lines := parseDotenv(plaintext)
-	if _, found := dotenvGet(lines, key); !found {
+	if _, exists := secrets[key]; !exists {
 		return errors.Newf("key %q not found in %s", key, file)
 	}
 
-	var filtered []string
-	prefix := key + "="
-	for _, line := range lines {
-		if !strings.HasPrefix(line, prefix) {
-			filtered = append(filtered, line)
-		}
-	}
+	delete(secrets, key)
 
-	if err := sopsEncrypt(strings.Join(filtered, "\n")+"\n", file); err != nil {
+	newEf, err := encryptSecrets(secrets, ef.Recipients)
+	if err != nil {
+		return err
+	}
+	if err := saveEncryptedFile(file, newEf); err != nil {
 		return err
 	}
 	fmt.Println(successStyle.Render(fmt.Sprintf("Removed %s from %s.", key, file)))
@@ -770,19 +947,18 @@ func cmdRm(file, key string) error {
 }
 
 func cmdShell(file string) error {
-	plaintext, err := sopsDecrypt(file)
+	ef, err := loadEncryptedFile(file)
+	if err != nil {
+		return err
+	}
+	secrets, err := decryptSecrets(ef)
 	if err != nil {
 		return err
 	}
 
-	env := os.Environ()
-	scanner := bufio.NewScanner(strings.NewReader(plaintext))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		env = append(env, line)
+	env := filterEnv(os.Environ(), "SHH_AGE_KEY")
+	for k, v := range secrets {
+		env = append(env, k+"="+v)
 	}
 
 	shell := os.Getenv("SHELL")
@@ -794,10 +970,12 @@ func cmdShell(file string) error {
 	return syscall.Exec(shell, []string{shell}, env)
 }
 
+// --- Key Management ---
+
 func keysListCmd() error {
-	keys, err := sopsKeysFromConfig()
+	ef, err := loadEncryptedFile(defaultEncryptedFile)
 	if err != nil {
-		return err
+		return errors.Newf("no %s found (run 'shh set' first)", defaultEncryptedFile)
 	}
 
 	var myKey string
@@ -806,18 +984,15 @@ func keysListCmd() error {
 	}
 
 	fmt.Println(headerStyle.Render("Authorized keys"))
-	for i, key := range keys {
-		name := keyName(key)
+	i := 0
+	for _, name := range sortedKeys(ef.Recipients) {
+		i++
+		pubKey := ef.Recipients[name]
 		marker := ""
-		if key == myKey {
+		if pubKey == myKey {
 			marker = " " + youStyle.Render("(you)")
 		}
-		if name == "" {
-			name = hintStyle.Render("<unnamed>")
-		} else {
-			name = nameStyle.Render(name)
-		}
-		fmt.Printf("  %d. %s  %s%s\n", i+1, keyStyle.Render(key), name, marker)
+		fmt.Printf("  %d. %s  %s%s\n", i, keyStyle.Render(pubKey), nameStyle.Render(name), marker)
 	}
 	return nil
 }
@@ -833,35 +1008,60 @@ func keysAddCmd(args []string) error {
 		return errors.New("invalid age public key (expected age1 followed by 58 lowercase alphanumeric characters)")
 	}
 
-	keys, err := sopsKeysFromConfig()
-	if err != nil {
-		return err
+	// Default name from the key prefix
+	if name == "" {
+		name = newKey[:12]
 	}
 
-	for _, k := range keys {
-		if k == newKey {
+	file := defaultEncryptedFile
+	var ef *EncryptedFile
+
+	if _, err := os.Stat(file); err == nil {
+		ef, err = loadEncryptedFile(file)
+		if err != nil {
+			return err
+		}
+	} else {
+		// Create new empty file with current user
+		recipients, err := defaultRecipients()
+		if err != nil {
+			return err
+		}
+		ef, err = encryptSecrets(map[string]string{}, recipients)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Check for duplicate key
+	for _, pk := range ef.Recipients {
+		if pk == newKey {
 			fmt.Println("Key already present.")
 			return nil
 		}
 	}
 
-	keys = append(keys, newKey)
-	if err := writeSopsConfig(keys); err != nil {
+	// Check for name collision
+	if _, exists := ef.Recipients[name]; exists {
+		return errors.Newf("recipient name %q already in use (specify a different name)", name)
+	}
+
+	// Add recipient and re-wrap data key
+	newRecipients := make(map[string]string, len(ef.Recipients)+1)
+	for k, v := range ef.Recipients {
+		newRecipients[k] = v
+	}
+	newRecipients[name] = newKey
+
+	if err := reWrapDataKey(ef, newRecipients); err != nil {
 		return err
 	}
-	if name != "" {
-		registerKey(newKey, name)
-	}
-	fmt.Println(successStyle.Render(fmt.Sprintf("Added key to %s.", sopsConfigFile)))
 
-	// Re-encrypt if encrypted file exists
-	encFile := defaultEncryptedFile
-	if _, err := os.Stat(encFile); err == nil {
-		if err := sopsUpdateKeys(encFile); err != nil {
-			return errors.Wrap(err, "re-encrypt")
-		}
-		fmt.Println(successStyle.Render("Re-encrypted with all keys."))
+	if err := saveEncryptedFile(file, ef); err != nil {
+		return err
 	}
+
+	fmt.Println(successStyle.Render(fmt.Sprintf("Added key for %s.", name)))
 	return nil
 }
 
@@ -911,58 +1111,46 @@ func keysAddGithubCmd(args []string) error {
 func keysRemoveCmd(args []string) error {
 	target := args[0]
 
-	keys, err := sopsKeysFromConfig()
+	ef, err := loadEncryptedFile(defaultEncryptedFile)
 	if err != nil {
-		return err
+		return errors.Newf("no %s found", defaultEncryptedFile)
 	}
 
 	// Resolve number to key
+	names := sortedKeys(ef.Recipients)
 	if n, err := strconv.Atoi(target); err == nil {
-		if n < 1 || n > len(keys) {
+		if n < 1 || n > len(names) {
 			return errors.Newf("invalid key number: %d", n)
 		}
-		target = keys[n-1]
+		target = ef.Recipients[names[n-1]]
 	}
 
-	var remaining []string
-	found := false
-	for _, k := range keys {
-		if k == target {
-			found = true
+	// Find and remove the key
+	var removedName string
+	newRecipients := make(map[string]string)
+	for name, pk := range ef.Recipients {
+		if pk == target || name == target {
+			removedName = name
 		} else {
-			remaining = append(remaining, k)
+			newRecipients[name] = pk
 		}
 	}
-	if !found {
+
+	if removedName == "" {
 		return errors.Newf("key not found: %s", target)
 	}
-	if len(remaining) == 0 {
+	if len(newRecipients) == 0 {
 		return errors.New("cannot remove the last key")
 	}
 
-	if err := writeSopsConfig(remaining); err != nil {
+	if err := reWrapDataKey(ef, newRecipients); err != nil {
 		return err
 	}
 
-	// Remove from registry
-	if data, err := os.ReadFile(keyRegistryFile); err == nil {
-		var lines []string
-		for _, line := range strings.Split(string(data), "\n") {
-			if line != "" && !strings.Contains(line, target) {
-				lines = append(lines, line)
-			}
-		}
-		os.WriteFile(keyRegistryFile, []byte(strings.Join(lines, "\n")+"\n"), 0644)
+	if err := saveEncryptedFile(defaultEncryptedFile, ef); err != nil {
+		return err
 	}
 
-	fmt.Println(successStyle.Render(fmt.Sprintf("Removed key: %s", target)))
-
-	encFile := defaultEncryptedFile
-	if _, err := os.Stat(encFile); err == nil {
-		if err := sopsUpdateKeys(encFile); err != nil {
-			return errors.Wrap(err, "re-encrypt")
-		}
-		fmt.Println(successStyle.Render("Re-encrypted."))
-	}
+	fmt.Println(successStyle.Render(fmt.Sprintf("Removed key: %s (%s)", removedName, target)))
 	return nil
 }
