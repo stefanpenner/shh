@@ -330,6 +330,30 @@ func TestFormatPlaintext(t *testing.T) {
 	assert.Equal(t, "AAA=1\nMMM=2\nZZZ=3\n", out)
 }
 
+func TestShellQuote(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"simple", "hello", "'hello'"},
+		{"empty", "", "''"},
+		{"dollar sign", "$HOME", "'$HOME'"},
+		{"backtick cmd sub", "`id`", "'`id`'"},
+		{"dollar cmd sub", "$(id)", "'$(id)'"},
+		{"single quote", "it's", "'it'\\''s'"},
+		{"double quote", `say "hi"`, `'say "hi"'`},
+		{"newline", "a\nb", "'a\nb'"},
+		{"backslash", `a\b`, `'a\b'`},
+		{"mixed specials", "$HOME;`id`;$(pwd)", "'$HOME;`id`;$(pwd)'"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, shellQuote(tt.input))
+		})
+	}
+}
+
 // --- Validation tests ---
 
 func TestEnvVarKeyValidation(t *testing.T) {
