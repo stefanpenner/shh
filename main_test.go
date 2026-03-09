@@ -55,11 +55,11 @@ func TestEncryptDecryptValue(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			enc, err := encryptValue(dataKey, tt.plaintext)
+			enc, err := encryptValue(dataKey, "TEST_KEY", tt.plaintext)
 			require.NoError(t, err)
 			assert.NotEqual(t, tt.plaintext, enc, "encrypted should differ from plaintext")
 
-			dec, err := decryptValue(dataKey, enc)
+			dec, err := decryptValue(dataKey, "TEST_KEY", enc)
 			require.NoError(t, err)
 			assert.Equal(t, tt.plaintext, dec)
 		})
@@ -70,9 +70,9 @@ func TestEncryptValue_UniqueNonces(t *testing.T) {
 	dataKey, err := generateDataKey()
 	require.NoError(t, err)
 
-	enc1, err := encryptValue(dataKey, "same")
+	enc1, err := encryptValue(dataKey, "KEY", "same")
 	require.NoError(t, err)
-	enc2, err := encryptValue(dataKey, "same")
+	enc2, err := encryptValue(dataKey, "KEY", "same")
 	require.NoError(t, err)
 
 	assert.NotEqual(t, enc1, enc2, "two encryptions of same plaintext should differ (unique nonces)")
@@ -82,7 +82,7 @@ func TestDecryptValue_InvalidBase64(t *testing.T) {
 	dataKey, err := generateDataKey()
 	require.NoError(t, err)
 
-	_, err = decryptValue(dataKey, "not-valid-base64!!!")
+	_, err = decryptValue(dataKey, "KEY", "not-valid-base64!!!")
 	assert.Error(t, err)
 }
 
@@ -90,12 +90,12 @@ func TestDecryptValue_TamperedCiphertext(t *testing.T) {
 	dataKey, err := generateDataKey()
 	require.NoError(t, err)
 
-	enc, err := encryptValue(dataKey, "secret")
+	enc, err := encryptValue(dataKey, "KEY", "secret")
 	require.NoError(t, err)
 
 	// Tamper with ciphertext
 	tampered := enc[:len(enc)-2] + "XX"
-	_, err = decryptValue(dataKey, tampered)
+	_, err = decryptValue(dataKey, "KEY", tampered)
 	assert.Error(t, err)
 }
 
@@ -105,11 +105,28 @@ func TestDecryptValue_WrongKey(t *testing.T) {
 	key2, err := generateDataKey()
 	require.NoError(t, err)
 
-	enc, err := encryptValue(key1, "secret")
+	enc, err := encryptValue(key1, "KEY", "secret")
 	require.NoError(t, err)
 
-	_, err = decryptValue(key2, enc)
+	_, err = decryptValue(key2, "KEY", enc)
 	assert.Error(t, err)
+}
+
+func TestAAD_PreventsValueSwapping(t *testing.T) {
+	dataKey, err := generateDataKey()
+	require.NoError(t, err)
+
+	enc, err := encryptValue(dataKey, "KEY_A", "secret_a")
+	require.NoError(t, err)
+
+	// Decrypting with the wrong key name should fail (AAD mismatch)
+	_, err = decryptValue(dataKey, "KEY_B", enc)
+	assert.Error(t, err, "decrypting with wrong key name AAD should fail")
+
+	// Decrypting with the correct key name should work
+	dec, err := decryptValue(dataKey, "KEY_A", enc)
+	require.NoError(t, err)
+	assert.Equal(t, "secret_a", dec)
 }
 
 func TestWrapUnwrapDataKey(t *testing.T) {
@@ -148,28 +165,62 @@ func TestWrapDataKey_MultiRecipient(t *testing.T) {
 func TestComputeMAC_Deterministic(t *testing.T) {
 	dataKey, _ := generateDataKey()
 	secrets := map[string]string{"A": "1", "B": "2"}
+	recipients := map[string]string{"alice": "age1aaa"}
 
-	mac1 := computeMAC(dataKey, secrets)
-	mac2 := computeMAC(dataKey, secrets)
+	mac1 := computeMAC(dataKey, 1,"dk", recipients, secrets)
+	mac2 := computeMAC(dataKey, 1,"dk", recipients, secrets)
 	assert.Equal(t, mac1, mac2)
 }
 
 func TestComputeMAC_DifferentSecrets(t *testing.T) {
 	dataKey, _ := generateDataKey()
+	recipients := map[string]string{"alice": "age1aaa"}
 
-	mac1 := computeMAC(dataKey, map[string]string{"A": "1"})
-	mac2 := computeMAC(dataKey, map[string]string{"A": "2"})
+	mac1 := computeMAC(dataKey, 1,"dk", recipients, map[string]string{"A": "1"})
+	mac2 := computeMAC(dataKey, 1,"dk", recipients, map[string]string{"A": "2"})
 	assert.NotEqual(t, mac1, mac2)
 }
 
 func TestComputeMAC_ConstantTimeComparison(t *testing.T) {
 	dataKey, _ := generateDataKey()
 	secrets := map[string]string{"A": "1"}
-	mac := computeMAC(dataKey, secrets)
+	recipients := map[string]string{"alice": "age1aaa"}
+	mac := computeMAC(dataKey, 1,"dk", recipients, secrets)
 
 	// Verify hmac.Equal works for comparison
 	assert.True(t, hmac.Equal([]byte(mac), []byte(mac)))
 	assert.False(t, hmac.Equal([]byte(mac), []byte("wrong")))
+}
+
+func TestComputeMAC_DetectsRecipientTampering(t *testing.T) {
+	dataKey, _ := generateDataKey()
+	secrets := map[string]string{"A": "1"}
+	recipients1 := map[string]string{"alice": "age1aaa"}
+	recipients2 := map[string]string{"alice": "age1aaa", "eve": "age1eve"}
+
+	mac1 := computeMAC(dataKey, 1,"dk", recipients1, secrets)
+	mac2 := computeMAC(dataKey, 1,"dk", recipients2, secrets)
+	assert.NotEqual(t, mac1, mac2)
+}
+
+func TestComputeMAC_DetectsVersionTampering(t *testing.T) {
+	dataKey, _ := generateDataKey()
+	secrets := map[string]string{"A": "1"}
+	recipients := map[string]string{"alice": "age1aaa"}
+
+	mac1 := computeMAC(dataKey, 1, "dk", recipients, secrets)
+	mac2 := computeMAC(dataKey, 99, "dk", recipients, secrets)
+	assert.NotEqual(t, mac1, mac2)
+}
+
+func TestComputeMAC_DetectsDataKeyTampering(t *testing.T) {
+	dataKey, _ := generateDataKey()
+	secrets := map[string]string{"A": "1"}
+	recipients := map[string]string{"alice": "age1aaa"}
+
+	mac1 := computeMAC(dataKey, 1,"dk1", recipients, secrets)
+	mac2 := computeMAC(dataKey, 1,"dk2", recipients, secrets)
+	assert.NotEqual(t, mac1, mac2)
 }
 
 // --- File format tests ---
@@ -287,7 +338,9 @@ func TestMarshalEncryptedFile_SortedOutput(t *testing.T) {
 		Secrets:    map[string]string{"ZZZ": "enc1", "AAA": "enc2"},
 	}
 
-	out := string(marshalEncryptedFile(ef))
+	data, err := marshalEncryptedFile(ef)
+	require.NoError(t, err)
+	out := string(data)
 
 	// Recipients should be sorted
 	aliceIdx := strings.Index(out, "alice")
@@ -298,6 +351,16 @@ func TestMarshalEncryptedFile_SortedOutput(t *testing.T) {
 	aaaIdx := strings.Index(out, "AAA")
 	zzzIdx := strings.Index(out, "ZZZ")
 	assert.Greater(t, zzzIdx, aaaIdx, "AAA should come before ZZZ")
+}
+
+func TestValidateTOMLValue(t *testing.T) {
+	assert.NoError(t, validateTOMLValue("hello world"))
+	assert.NoError(t, validateTOMLValue("line1\nline2"))
+	assert.NoError(t, validateTOMLValue("tab\there"))
+	assert.NoError(t, validateTOMLValue(""))
+	assert.Error(t, validateTOMLValue("has\x00null"))
+	assert.Error(t, validateTOMLValue("has\x01ctrl"))
+	assert.Error(t, validateTOMLValue("bell\x07here"))
 }
 
 // --- Plaintext parsing tests ---
@@ -421,6 +484,20 @@ func TestGithubUsernameValidation(t *testing.T) {
 			assert.Equal(t, tt.valid, githubUserPattern.MatchString(tt.user))
 		})
 	}
+}
+
+func TestDangerousEnvVarDenylist(t *testing.T) {
+	blocked := []string{"PATH", "HOME", "SHELL", "USER", "LOGNAME",
+		"LD_PRELOAD", "LD_LIBRARY_PATH",
+		"DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH"}
+	for _, key := range blocked {
+		t.Run(key, func(t *testing.T) {
+			assert.True(t, dangerousEnvVars[key], "%s should be in denylist", key)
+		})
+	}
+	// Legitimate keys should not be blocked
+	assert.False(t, dangerousEnvVars["DATABASE_URL"])
+	assert.False(t, dangerousEnvVars["API_KEY"])
 }
 
 // --- Integration tests ---
@@ -625,6 +702,28 @@ func TestIntegration_MACTampering(t *testing.T) {
 	assert.Contains(t, err.Error(), "MAC verification failed")
 }
 
+func TestIntegration_MACDetectsRecipientTamperingInFile(t *testing.T) {
+	useTempDir(t)
+
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+
+	secrets := map[string]string{"SECRET": "hello"}
+	ef, err := encryptSecrets(secrets, map[string]string{"testuser": pubKey})
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(".env.enc", ef))
+
+	// Tamper with recipients (add an extra one)
+	loaded, _ := loadEncryptedFile(".env.enc")
+	loaded.Recipients["eve"] = "age1evexxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+	require.NoError(t, saveEncryptedFile(".env.enc", loaded))
+
+	reloaded, _ := loadEncryptedFile(".env.enc")
+	_, err = decryptSecrets(reloaded)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "MAC verification failed")
+}
+
 func TestIntegration_EmptySecrets(t *testing.T) {
 	useTempDir(t)
 
@@ -639,6 +738,69 @@ func TestIntegration_EmptySecrets(t *testing.T) {
 	decrypted, err := decryptSecrets(loaded)
 	require.NoError(t, err)
 	assert.Empty(t, decrypted)
+}
+
+func TestIntegration_UnauthorizedRecipientCannotDecrypt(t *testing.T) {
+	useTempDir(t)
+
+	priv1, pub1 := generateTestKey(t)
+	priv2, _ := generateTestKey(t)
+
+	setTestAgeKey(t, priv1)
+	secrets := map[string]string{"SECRET": "hello"}
+	ef, err := encryptSecrets(secrets, map[string]string{"user1": pub1})
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(".env.enc", ef))
+
+	// Try to decrypt with unauthorized key
+	setTestAgeKey(t, priv2)
+	loaded, _ := loadEncryptedFile(".env.enc")
+	_, err = decryptSecrets(loaded)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not in the recipients list")
+}
+
+func TestIntegration_UsersRemoveRotatesDataKey(t *testing.T) {
+	useTempDir(t)
+
+	priv1, pub1 := generateTestKey(t)
+	priv2, pub2 := generateTestKey(t)
+
+	setTestAgeKey(t, priv1)
+	secrets := map[string]string{"SECRET": "hello"}
+	recipients := map[string]string{"user1": pub1, "user2": pub2}
+	ef, err := encryptSecrets(secrets, recipients)
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(".env.enc", ef))
+
+	// Capture the old wrapped data key
+	oldDataKey := ef.DataKey
+
+	// Remove user2 (simulating usersRemoveCmd logic: decrypt then re-encrypt)
+	loaded, _ := loadEncryptedFile(".env.enc")
+	decrypted, err := decryptSecrets(loaded)
+	require.NoError(t, err)
+	newRecipients := map[string]string{"user1": pub1}
+	newEf, err := encryptSecrets(decrypted, newRecipients)
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(".env.enc", newEf))
+
+	// Data key should be different (rotated)
+	assert.NotEqual(t, oldDataKey, newEf.DataKey)
+
+	// Old data key should not decrypt new secrets
+	oldDK, err := unwrapDataKey(oldDataKey, priv1)
+	require.NoError(t, err)
+	for _, v := range newEf.Secrets {
+		_, err := decryptValue(oldDK, "SECRET", v)
+		assert.Error(t, err, "old data key should not decrypt values encrypted with new key")
+	}
+
+	// Removed user cannot decrypt (not in recipients)
+	setTestAgeKey(t, priv2)
+	reloaded, _ := loadEncryptedFile(".env.enc")
+	_, err = decryptSecrets(reloaded)
+	assert.Error(t, err)
 }
 
 func TestPublicKeyFrom(t *testing.T) {
@@ -657,4 +819,105 @@ func TestFilterEnv(t *testing.T) {
 	assert.Len(t, filtered, 3)
 	assert.NotContains(t, filtered, "SHH_AGE_KEY=secret")
 	assert.Contains(t, filtered, "FOO=bar")
+}
+
+// --- Fuzz tests ---
+
+func FuzzEncryptDecryptValue(f *testing.F) {
+	f.Add("hello", "KEY")
+	f.Add("", "")
+	f.Add("p@ss w0rd!#$%^&*()", "MY_SECRET")
+	f.Add(strings.Repeat("x", 10000), "BIG")
+	f.Fuzz(func(t *testing.T, plaintext, keyName string) {
+		dataKey, err := generateDataKey()
+		if err != nil {
+			t.Skip()
+		}
+		enc, err := encryptValue(dataKey, keyName, plaintext)
+		if err != nil {
+			t.Skip()
+		}
+		dec, err := decryptValue(dataKey, keyName, enc)
+		require.NoError(t, err)
+		assert.Equal(t, plaintext, dec)
+	})
+}
+
+func FuzzComputeMAC(f *testing.F) {
+	f.Add("key1", "val1")
+	f.Add("", "")
+	f.Add("A\x00B", "val") // null byte in key
+	f.Fuzz(func(t *testing.T, k, v string) {
+		dataKey, err := generateDataKey()
+		if err != nil {
+			t.Skip()
+		}
+		secrets := map[string]string{k: v}
+		recipients := map[string]string{"alice": "age1aaa"}
+		mac1 := computeMAC(dataKey, 1,"dk", recipients, secrets)
+		mac2 := computeMAC(dataKey, 1,"dk", recipients, secrets)
+		assert.Equal(t, mac1, mac2, "MAC should be deterministic")
+	})
+}
+
+func FuzzParsePlaintext(f *testing.F) {
+	f.Add("FOO=bar\nBAZ=qux")
+	f.Add("")
+	f.Add("# comment\nKEY=value")
+	f.Add("NO_EQUALS_SIGN")
+	f.Add("=empty_key")
+	f.Fuzz(func(t *testing.T, input string) {
+		// Should not panic
+		parsePlaintext(input)
+	})
+}
+
+func FuzzShellQuote(f *testing.F) {
+	f.Add("hello")
+	f.Add("it's")
+	f.Add("$HOME;`id`")
+	f.Add("")
+	f.Add("'")
+	f.Add("a\nb\tc")
+	f.Fuzz(func(t *testing.T, input string) {
+		result := shellQuote(input)
+		// Must start and end with single quote
+		assert.True(t, strings.HasPrefix(result, "'"))
+		assert.True(t, strings.HasSuffix(result, "'"))
+	})
+}
+
+func FuzzTomlKey(f *testing.F) {
+	f.Add("SIMPLE")
+	f.Add("has space")
+	f.Add("")
+	f.Add("with.dot")
+	f.Add("with\"quote")
+	f.Fuzz(func(t *testing.T, input string) {
+		// Should not panic
+		tomlKey(input)
+	})
+}
+
+func FuzzValidateTOMLValue(f *testing.F) {
+	f.Add("hello")
+	f.Add("")
+	f.Add("\x00")
+	f.Add("line\nbreak")
+	f.Fuzz(func(t *testing.T, input string) {
+		err := validateTOMLValue(input)
+		// If no control chars, should pass
+		hasControl := false
+		for _, c := range input {
+			if c < 0x20 && c != '\t' && c != '\n' && c != '\r' {
+				hasControl = true
+				break
+			}
+		}
+		if hasControl {
+			assert.Error(t, err)
+		} else {
+			assert.NoError(t, err)
+		}
+	})
 }
