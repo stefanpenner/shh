@@ -4,15 +4,19 @@ This document explains the security architecture of `shh`: the encrypted file fo
 
 ## Encrypted File Format (`.env.enc`)
 
-The `.env.enc` file is plain TOML with five fields:
+The `.env.enc` file is plain TOML with five sections:
 
 ```toml
-version = 1
+version = 2
 mac = "513417edad3bfd08..."
-data_key = "YWdlLWVuY3J5cHRpb24..."
 
 [recipients]
 "https://github.com/alice" = "age1abc..."
+"https://github.com/bob" = "age1def..."
+
+[wrapped_keys]
+"https://github.com/alice" = "YWdlLWVuY3J5cHRpb24..."
+"https://github.com/bob" = "YWdlLWVuY3J5cHRpb24..."
 
 [secrets]
 API_KEY = "EU8FFxADNGlY..."
@@ -20,7 +24,7 @@ API_KEY = "EU8FFxADNGlY..."
 
 ### `version`
 
-**What:** Integer format version (currently `1`).
+**What:** Integer format version (currently `2`; v1 files are still readable for backward compatibility).
 
 **Why:** Allows future changes to the file format, encryption scheme, or MAC construction without silently misinterpreting old files. On load, `shh` rejects any version it doesn't understand.
 
@@ -28,30 +32,33 @@ API_KEY = "EU8FFxADNGlY..."
 
 **What:** Hex-encoded HMAC-SHA256 digest.
 
-**Why:** Detects tampering with any part of the file. The MAC covers every field — version, data key, recipients (names and public keys), and all secret entries (names and ciphertext). An attacker who modifies any byte causes MAC verification to fail.
+**Why:** Detects tampering with any part of the file. The MAC covers every field — version, per-recipient wrapped keys, recipients (names and public keys), and all secret entries (names and ciphertext). An attacker who modifies any byte causes MAC verification to fail.
 
 **How:** Computed with HMAC-SHA256, keyed by the data key itself. Fields are fed in deterministic sorted order with null-byte separators to prevent ambiguity between adjacent values. Verified using `hmac.Equal()` (constant-time comparison) to prevent timing side-channels.
 
 **What it prevents:**
 - Adding, removing, or modifying recipients without detection
 - Altering encrypted secret values or key names
-- Changing the version or wrapped data key
+- Changing the version or any wrapped data key
 - Downgrade attacks (changing version to exploit a hypothetical older parser)
 
 **Circular protection:** An attacker cannot recompute the MAC because the MAC key (the data key) is itself encrypted under age — only authorized recipients can unwrap it.
 
-### `data_key`
+### `[wrapped_keys]`
 
-**What:** Base64-encoded age-encrypted blob containing a random 32-byte AES-256 key.
+**What:** A TOML table mapping recipient names to base64-encoded age-encrypted blobs, each containing the same random 32-byte AES-256 data key.
 
-**Why:** Envelope encryption. A single symmetric key encrypts all secrets, and that key is wrapped with age (X25519 HPKE) for every recipient. This means:
+**Why:** Envelope encryption with per-recipient key wrapping. A single symmetric data key encrypts all secrets, and that key is individually wrapped with age (X25519 HPKE) for each recipient. This means:
 
 - Adding a user re-wraps the data key for the expanded recipient list — existing secret ciphertext doesn't change.
 - Removing a user generates a **new** data key, re-encrypts all secrets, and wraps only for remaining recipients. The removed user's knowledge of the old data key becomes useless.
+- Each recipient can only unwrap their own copy of the data key. Cross-decryption (using one recipient's wrapped key with another's private key) fails.
 
-**How:** The 32-byte key is generated from `crypto/rand`. It's encrypted with `filippo.io/age` to all recipient public keys, then base64-encoded. On decryption, the user's private age identity (stored in the OS keyring) unwraps it.
+**How:** The 32-byte data key is generated from `crypto/rand`. For each recipient, it is independently encrypted with `filippo.io/age` to that recipient's public key, then base64-encoded. On decryption, the user's private age identity (stored in the OS keyring) unwraps their specific entry.
 
 **Key rotation:** The data key is rotated on every `users remove` operation. On `users add`, the same data key is re-wrapped to include the new recipient (no re-encryption of secrets needed since the new user is being granted access to the current secrets).
+
+**v1 compatibility:** Version 1 files used a single `data_key` field wrapped for all recipients at once. `shh` can still read and decrypt v1 files but always writes v2 format with per-recipient `[wrapped_keys]`.
 
 ### `[recipients]`
 
