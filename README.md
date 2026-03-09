@@ -2,7 +2,7 @@
 
 > **Warning:** Experimental — not yet ready for production use.
 
-Commit your secrets. Yes, really.
+🤫 Commit your secrets. Yes, really.
 
 * Encrypted secrets live in your repo, safe to push, easy to share.
 * Add teammates by GitHub username — `shh users add alice` fetches their SSH key automatically.
