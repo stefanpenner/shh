@@ -106,13 +106,12 @@ func newRootCmd() *cobra.Command {
 		Short: "Generate age key and store in OS keyring",
 		RunE:  runInit,
 	}
-	initCmd.Flags().String("from-ssh", "", "Derive age key from SSH ed25519 key (optionally specify path)")
 	rootCmd.AddCommand(initCmd)
 
 	// login command
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "login",
-		Short: "Log in (auto-detects SSH key via GitHub, or paste manually)",
+		Short: "Log in (auto-detects SSH key via GitHub)",
 		RunE:  runLogin,
 	})
 
@@ -190,8 +189,9 @@ func newRootCmd() *cobra.Command {
 
 	// rm command
 	rootCmd.AddCommand(&cobra.Command{
-		Use:   "rm <KEY> [file]",
-		Short: "Remove a secret",
+		Use:     "rm <KEY> [file]",
+		Aliases: []string{"unset"},
+		Short:   "Remove a secret",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			file := findEncFile()
@@ -231,9 +231,9 @@ func newRootCmd() *cobra.Command {
 	})
 
 	usersCmd.AddCommand(&cobra.Command{
-		Use:   "add <username-or-key> [name]",
+		Use:   "add <github-username | age-public-key>",
 		Short: "Add a user by GitHub username or age public key",
-		Args:  cobra.RangeArgs(1, 2),
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return usersAddCmd(args)
 		},
@@ -299,14 +299,20 @@ func currentUsername() string {
 	return os.Getenv("USER")
 }
 
-// parseRecipientName splits "github:alice" into ("alice", "https://github.com/alice")
-// and returns ("bob", "") for plain names.
-func parseRecipientName(name string) (displayName, ghURL string) {
-	if strings.HasPrefix(name, "github:") {
-		username := strings.TrimPrefix(name, "github:")
-		return username, "https://github.com/" + username
+func requireGHUsername() (string, error) {
+	username := ghUsername()
+	if username == "" {
+		return "", errors.New("GitHub CLI (gh) is required but not installed or not logged in.\n\n  Install: https://cli.github.com\n  Then:    gh auth login")
 	}
-	return name, ""
+	return username, nil
+}
+
+// recipientDisplayName returns a short display name for a recipient.
+func recipientDisplayName(name string) string {
+	if strings.HasPrefix(name, "https://github.com/") {
+		return strings.TrimPrefix(name, "https://github.com/")
+	}
+	return name
 }
 
 func sortedKeys(m map[string]string) []string {
@@ -350,16 +356,10 @@ func cmdWhoami() error {
 	fmt.Printf("  key: %s\n", keyStyle.Render(pubKey))
 
 	// Check if we're in a project's recipients list
-	ghShown := false
 	if ef, err := loadEncryptedFile(findEncFile()); err == nil {
 		for name, pk := range ef.Recipients {
 			if pk == pubKey {
-				displayName, ghURL := parseRecipientName(name)
-				fmt.Printf(" name: %s\n", nameStyle.Render(displayName))
-				if ghURL != "" {
-					fmt.Printf("   gh: %s\n", hintStyle.Render(ghURL))
-					ghShown = true
-				}
+				fmt.Printf(" user: %s\n", nameStyle.Render(name))
 				break
 			}
 		}
@@ -378,13 +378,6 @@ func cmdWhoami() error {
 		if *pubPtr == pubKey {
 			fmt.Printf("  ssh: %s\n", hintStyle.Render(sshPath))
 			break
-		}
-	}
-
-	// Check GitHub identity via gh CLI if not already shown
-	if !ghShown {
-		if username := ghUsername(); username != "" {
-			fmt.Printf("   gh: %s\n", hintStyle.Render("https://github.com/"+username))
 		}
 	}
 
@@ -536,7 +529,6 @@ func computeMAC(dataKey []byte, version int, wrappedDataKey string, recipients m
 	}
 	return fmt.Sprintf("%x", mac.Sum(nil))
 }
-
 
 // --- File I/O ---
 
@@ -703,8 +695,8 @@ func decryptSecrets(ef *EncryptedFile) (map[string]string, error) {
 			names = append(names, name)
 		}
 		sort.Strings(names)
-		return nil, errors.Newf("your key (%s) is not in the recipients list\n  authorized: %s\n  ask a teammate to run: shh keys add %s",
-			pubKey, strings.Join(names, ", "), pubKey)
+		return nil, errors.Newf("your key (%s) is not in the recipients list\n  authorized: %s\n  ask a teammate to run: shh users add <your-github-username>",
+			pubKey, strings.Join(names, ", "))
 	}
 
 	dataKey, err := unwrapDataKey(ef.DataKey, privKey)
@@ -802,7 +794,11 @@ func defaultRecipients() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]string{currentUsername(): pubKey}, nil
+	username, err := requireGHUsername()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{"https://github.com/" + username: pubKey}, nil
 }
 
 // --- Commands ---
@@ -864,53 +860,27 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Require GitHub CLI
+	username, err := requireGHUsername()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("GitHub user: %s\n", nameStyle.Render(username))
+
 	// Load recipients from .env.enc if it exists
 	var recipients map[string]string
 	if ef, err := loadEncryptedFile(findEncFile()); err == nil {
 		recipients = ef.Recipients
 	}
 
-	// Strategy 1: Try gh CLI to get GitHub username
-	if username := ghUsername(); username != "" {
-		fmt.Printf("GitHub user: %s\n", nameStyle.Render(username))
-
-		// Find local SSH keys and try to match against recipients
-		for _, sshPath := range findSSHEd25519Keys() {
-			data, _ := os.ReadFile(sshPath)
-			privPtr, pubPtr, err := sshtoa.SSHPrivateKeyToAge(data, nil)
-			if err != nil {
-				continue
-			}
-			// Check if this key is a recipient
-			if recipients != nil {
-				for _, rk := range recipients {
-					if rk == *pubPtr {
-						if err := storeKey(*privPtr); err != nil {
-							return errors.Wrap(err, "keyring store")
-						}
-						fmt.Printf("Matched SSH key %s\n", hintStyle.Render(sshPath))
-						fmt.Println(successStyle.Render("Key stored in OS keyring."))
-						fmt.Printf("  %s\n", keyStyle.Render(*pubPtr))
-						return nil
-					}
-				}
-			}
+	// Find local SSH keys and try to match against recipients
+	for _, sshPath := range findSSHEd25519Keys() {
+		data, _ := os.ReadFile(sshPath)
+		privPtr, pubPtr, err := sshtoa.SSHPrivateKeyToAge(data, nil)
+		if err != nil {
+			continue
 		}
-
-		// SSH key exists but no match
 		if recipients != nil {
-			return errors.Newf("your SSH key is not in the recipients list\n  ask a teammate to run: shh keys add-github %s", username)
-		}
-	}
-
-	// Strategy 2: Try all local SSH keys against recipients (no gh)
-	if recipients != nil {
-		for _, sshPath := range findSSHEd25519Keys() {
-			data, _ := os.ReadFile(sshPath)
-			privPtr, pubPtr, err := sshtoa.SSHPrivateKeyToAge(data, nil)
-			if err != nil {
-				continue
-			}
 			for _, rk := range recipients {
 				if rk == *pubPtr {
 					if err := storeKey(*privPtr); err != nil {
@@ -923,35 +893,13 @@ func runLogin(cmd *cobra.Command, args []string) error {
 				}
 			}
 		}
-
-		// Had SSH keys but none matched
-		if len(findSSHEd25519Keys()) > 0 {
-			return errors.New("your SSH key is not in the recipients list\n  ask a teammate to add you: shh keys add-github <your-github-username>")
-		}
 	}
 
-	// Strategy 3: Manual paste
-	fmt.Print("Paste your age private key (AGE-SECRET-KEY-1...): ")
-	scanner := bufio.NewScanner(os.Stdin)
-	if !scanner.Scan() {
-		return errors.New("no input")
-	}
-	privateKey := strings.TrimSpace(scanner.Text())
-	if !strings.HasPrefix(privateKey, "AGE-SECRET-KEY-1") {
-		return errors.New("invalid age private key (must start with AGE-SECRET-KEY-1)")
-	}
-	publicKey, err := publicKeyFrom(privateKey)
-	if err != nil {
-		return errors.Wrap(err, "invalid age private key")
+	if recipients != nil {
+		return errors.Newf("your SSH key is not in the recipients list\n  ask a teammate to run: shh users add %s", username)
 	}
 
-	if err := storeKey(privateKey); err != nil {
-		return errors.Wrap(err, "keyring store")
-	}
-
-	fmt.Println(successStyle.Render("Key stored in OS keyring."))
-	fmt.Printf("  %s\n", keyStyle.Render(publicKey))
-	return nil
+	return errors.New("no .env.enc found — run 'shh init' to start a new project")
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
@@ -965,18 +913,20 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Require GitHub CLI
+	username, err := requireGHUsername()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("GitHub user: %s\n", nameStyle.Render(username))
+
 	var privateKey, publicKey string
 
-	fromSSH, _ := cmd.Flags().GetString("from-ssh")
-	if cmd.Flags().Changed("from-ssh") {
-		sshKey := fromSSH
-		if sshKey == "" {
-			sshKey = filepath.Join(os.Getenv("HOME"), ".ssh", "id_ed25519")
-		}
-		if _, err := os.Stat(sshKey); err != nil { // #nosec G703,G304 -- user explicitly supplies their own SSH key path via --from-ssh flag
-			return errors.Newf("SSH key not found: %s", sshKey)
-		}
-		sshKeyData, err := os.ReadFile(sshKey) // #nosec G703,G304 -- user explicitly supplies their own SSH key path via --from-ssh flag
+	// Try to find an ed25519 SSH key to derive from
+	sshKeys := findSSHEd25519Keys()
+	if len(sshKeys) > 0 {
+		sshKey := sshKeys[0]
+		sshKeyData, err := os.ReadFile(sshKey) // #nosec G304 -- auto-detected from ~/.ssh
 		if err != nil {
 			return errors.Wrap(err, "read SSH key")
 		}
@@ -986,6 +936,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 		privateKey = *privKeyPtr
 		publicKey = *pubKeyPtr
+		fmt.Printf("Using SSH key: %s\n", hintStyle.Render(sshKey))
 	} else {
 		identity, err := age.GenerateX25519Identity()
 		if err != nil {
@@ -993,19 +944,19 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 		privateKey = identity.String()
 		publicKey = identity.Recipient().String()
+		fmt.Println(hintStyle.Render("No SSH ed25519 key found, generated a new age key."))
 	}
 
 	if err := storeKey(privateKey); err != nil {
 		return errors.Wrap(err, "keyring store")
 	}
 
-	username := currentUsername()
-	fmt.Println(successStyle.Render("Age key stored in OS keyring."))
+	fmt.Println(successStyle.Render("Key stored in OS keyring."))
 	fmt.Println()
-	fmt.Println("Your public key:")
-	fmt.Printf("  %s\n", keyStyle.Render(publicKey))
+	fmt.Printf("  key: %s\n", keyStyle.Render(publicKey))
+	fmt.Printf("   gh: %s\n", hintStyle.Render("https://github.com/"+username))
 	fmt.Println()
-	fmt.Printf("To add you to a project: shh keys add %s %s\n", publicKey, username)
+	fmt.Printf("To add you to a project: shh users add %s\n", username)
 	return nil
 }
 
@@ -1294,9 +1245,6 @@ func usersListCmd() error {
 		myKey, _ = publicKeyFrom(priv)
 	}
 
-	// Detect current user's GitHub username once (for users without github: prefix)
-	myGH := ghUsername()
-
 	fmt.Println(headerStyle.Render("Authorized users"))
 	i := 0
 	for _, name := range sortedKeys(ef.Recipients) {
@@ -1306,29 +1254,19 @@ func usersListCmd() error {
 		if pubKey == myKey {
 			marker = " " + youStyle.Render("(you)")
 		}
-		displayName, ghURL := parseRecipientName(name)
-		// If no github: prefix but this is us and we have gh CLI, show our GitHub
-		if ghURL == "" && pubKey == myKey && myGH != "" {
-			ghURL = "https://github.com/" + myGH
-		}
-		nameStr := nameStyle.Render(displayName)
-		if ghURL != "" {
-			nameStr += " " + hintStyle.Render(ghURL)
-		}
-		fmt.Printf("  %d. %s  %s%s\n", i, keyStyle.Render(pubKey), nameStr, marker)
+		fmt.Printf("  %d. %s  %s%s\n", i, keyStyle.Render(pubKey), nameStyle.Render(name), marker)
 	}
 	return nil
 }
 
-// resolveUserKey resolves the argument to an age public key and a name.
-// If the argument is an age key, it's used directly.
-// Otherwise, it's treated as a GitHub username and the SSH key is fetched.
+// resolveUserKey resolves the argument to an age public key and a recipient name.
+// Age public keys (age1...) are accepted directly.
+// Everything else is treated as a GitHub username.
 func resolveUserKey(arg string) (ageKey, name string, err error) {
 	if ageKeyPattern.MatchString(arg) {
-		return arg, arg[:12], nil
+		return arg, arg, nil
 	}
 
-	// Treat as GitHub username
 	username := arg
 	if !githubUserPattern.MatchString(username) {
 		return "", "", errors.Newf("invalid GitHub username or age key: %q", username)
@@ -1366,7 +1304,7 @@ func resolveUserKey(arg string) (ageKey, name string, err error) {
 	}
 	fmt.Printf("Converted %s's SSH key -> %s\n", username, keyStyle.Render(*ageKeyPtr))
 
-	return *ageKeyPtr, "github:" + username, nil
+	return *ageKeyPtr, "https://github.com/" + username, nil
 }
 
 func usersAddCmd(args []string) error {
@@ -1374,11 +1312,6 @@ func usersAddCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	// Explicit name overrides the default
-	if len(args) > 1 {
-		name = args[1]
-	}
-
 	file := findEncFile()
 	var ef *EncryptedFile
 
@@ -1427,8 +1360,7 @@ func usersAddCmd(args []string) error {
 		return err
 	}
 
-	displayName, _ := parseRecipientName(name)
-	fmt.Println(successStyle.Render(fmt.Sprintf("Added %s.", displayName)))
+	fmt.Println(successStyle.Render(fmt.Sprintf("Added %s.", recipientDisplayName(name))))
 	return nil
 }
 

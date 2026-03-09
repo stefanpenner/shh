@@ -7,7 +7,7 @@
 * Encrypted secrets live in your repo, safe to push, easy to share.
 * Add teammates by GitHub username — `shh users add alice` fetches their SSH key automatically.
 * No GitHub? Pass an [age](https://github.com/FiloSottile/age) key directly.
-* One binary, no dependencies. Private keys stay in your OS keyring.
+* One binary, one dependency ([`gh`](https://cli.github.com)). Private keys stay in your OS keyring.
 
 ## Install
 
@@ -24,7 +24,7 @@ go install github.com/stefanpenner/shh@latest
 ## Quick Start
 
 ```bash
-shh init                              # one-time setup (stores key in OS keyring)
+shh init                              # one-time setup (requires gh auth login)
 shh set DATABASE_URL postgres://localhost/mydb
 shh set API_KEY sk-secret123
 shh shell                             # launch a shell with secrets loaded
@@ -41,7 +41,7 @@ shh edit                              # edit all secrets in $EDITOR
 shh list                              # list secret names
 shh env                               # print export statements
 shh shell                             # open a shell with secrets loaded
-shh whoami                            # show your key, name, and GitHub identity
+shh whoami                            # show your key and identity
 ```
 
 All commands default to `.env.enc`. Pass a different file as the last argument:
@@ -87,7 +87,7 @@ shh users remove <user|#>            # revoke access
 ### Identity
 
 ```bash
-shh init                              # create a new identity
+shh init                              # create identity (uses gh + SSH key)
 shh login                             # restore existing identity (auto-detects SSH/GitHub)
 shh logout                            # remove key from OS keyring
 shh whoami                            # show your key and identity
