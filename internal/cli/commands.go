@@ -133,7 +133,7 @@ func cmdEdit(file string) error {
 	defer os.Remove(tmpPath)
 
 	if err := tmpFile.Chmod(0600); err != nil {
-		tmpFile.Close()
+		tmpFile.Close() // #nosec G104 -- best-effort cleanup; already returning Chmod error
 		return errors.Wrap(err, "chmod temp file")
 	}
 
