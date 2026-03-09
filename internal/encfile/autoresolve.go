@@ -22,7 +22,7 @@ func TryAutoResolve(path string, privateKey string) (*EncryptedFile, error) {
 	base := filepath.Base(path)
 
 	gitCmd := func(args ...string) *exec.Cmd {
-		cmd := exec.Command("git", args...)
+		cmd := exec.Command("git", args...) // #nosec G204 -- args are fixed git subcommands; no shell involved
 		cmd.Dir = dir
 		return cmd
 	}

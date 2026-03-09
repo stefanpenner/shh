@@ -97,22 +97,20 @@ func runLogin(cmd *cobra.Command, args []string) error {
 
 	// Find local SSH keys and try to match against recipients
 	for _, sshPath := range sshkeys.FindEd25519Keys() {
-		data, _ := os.ReadFile(sshPath)
+		data, _ := os.ReadFile(sshPath) // #nosec G304 -- path from FindEd25519Keys, restricted to ~/.ssh/
 		privPtr, pubPtr, err := sshkeys.ToAge(data, sshPath)
 		if err != nil {
 			continue
 		}
-		if recipients != nil {
-			for _, rk := range recipients {
-				if rk == *pubPtr {
-					if err := keyring.StoreKey(*privPtr); err != nil {
-						return errors.Wrap(err, "keyring store")
-					}
-					fmt.Printf("Matched SSH key %s\n", hintStyle.Render(sshPath))
-					fmt.Println(successStyle.Render("Key stored in OS keyring."))
-					fmt.Printf("  %s\n", keyStyle.Render(*pubPtr))
-					return nil
+		for _, rk := range recipients { // ranging over nil map is safe (no iterations)
+			if rk == *pubPtr {
+				if err := keyring.StoreKey(*privPtr); err != nil {
+					return errors.Wrap(err, "keyring store")
 				}
+				fmt.Printf("Matched SSH key %s\n", hintStyle.Render(sshPath))
+				fmt.Println(successStyle.Render("Key stored in OS keyring."))
+				fmt.Printf("  %s\n", keyStyle.Render(*pubPtr))
+				return nil
 			}
 		}
 	}
@@ -148,7 +146,7 @@ func cmdWhoami() error {
 
 	// Check which SSH key this corresponds to
 	for _, sshPath := range sshkeys.FindEd25519Keys() {
-		data, err := os.ReadFile(sshPath)
+		data, err := os.ReadFile(sshPath) // #nosec G304 -- path from FindEd25519Keys, restricted to ~/.ssh/
 		if err != nil {
 			continue
 		}

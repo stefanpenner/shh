@@ -28,7 +28,7 @@ func cmdTemplate(templatePath string, encFilePath string) error {
 	if templatePath == "-" {
 		tmplBytes, err = io.ReadAll(os.Stdin)
 	} else {
-		tmplBytes, err = os.ReadFile(templatePath)
+		tmplBytes, err = os.ReadFile(templatePath) // #nosec G304 -- templatePath is a user-supplied CLI argument
 	}
 	if err != nil {
 		return errors.Wrap(err, "read template")
