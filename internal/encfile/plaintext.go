@@ -38,7 +38,7 @@ func FormatPlaintext(secrets map[string]string) string {
 // or by decrypting the encrypted file.
 func LoadSecrets(encFile string, privateKey string) (map[string]string, error) {
 	if plainFile := os.Getenv("SHH_PLAINTEXT"); plainFile != "" {
-		data, err := os.ReadFile(plainFile)
+		data, err := os.ReadFile(plainFile) // #nosec G304 G703 -- SHH_PLAINTEXT is an intentional operator-controlled escape hatch (CI/testing)
 		if err != nil {
 			return nil, errors.Wrapf(err, "read plaintext file %s", plainFile)
 		}

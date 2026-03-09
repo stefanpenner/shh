@@ -93,7 +93,7 @@ func newRootCmd() *cobra.Command {
 			env, _ := cmd.Flags().GetString("env")
 			quiet, _ := cmd.Flags().GetBool("quiet")
 			return cmdEnv(envutil.ResolveFile(env, args), os.Stderr, func() bool {
-				return term.IsTerminal(int(os.Stdout.Fd()))
+				return term.IsTerminal(int(os.Stdout.Fd())) // #nosec G115 -- file descriptors always fit in int
 			}, quiet)
 		},
 	}
