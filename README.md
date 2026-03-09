@@ -89,6 +89,32 @@ shh users add <username-or-key>       # add by GitHub username or age key
 shh users remove <user|#>            # revoke access (rotates data key)
 ```
 
+## CI / Production
+
+Create a deploy key for environments that don't have a GitHub identity:
+
+```bash
+shh users add --name production-deploy
+# Prints a secret key — store it as SHH_AGE_KEY in your CI/deploy platform
+git add .env.enc && git push
+```
+
+Then in your CI pipeline or Dockerfile:
+
+```bash
+shh run -- node app.js            # secrets injected, SHH_AGE_KEY auto-filtered
+# or
+eval $(shh env -q)                # export secrets into the current shell
+```
+
+You manage **one** platform secret (`SHH_AGE_KEY`); everything else lives in `.env.enc`.
+
+If you already have an age public key, pass it directly:
+
+```bash
+shh users add --name staging --key age1xyzt...
+```
+
 ## How It Works
 
 `shh` uses **envelope encryption**: a random 32-byte AES-256 **data key** encrypts all secrets, and that data key is wrapped (age-encrypted) individually to each recipient.
