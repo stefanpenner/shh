@@ -314,6 +314,22 @@ func newRootCmd() *cobra.Command {
 
 	rootCmd.AddCommand(usersCmd)
 
+	// template command
+	templateCmd := &cobra.Command{
+		Use:   "template <file> [env-file]",
+		Short: "Render a template with secrets substituted",
+		Long:  "Replace {{SECRET_NAME}} placeholders in a template file with decrypted secret values. Output goes to stdout.",
+		Args:  cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			file := findEncFile()
+			if len(args) > 1 {
+				file = args[1]
+			}
+			return cmdTemplate(args[0], file)
+		},
+	}
+	rootCmd.AddCommand(templateCmd)
+
 	return rootCmd
 }
 
@@ -2025,5 +2041,51 @@ func usersRemoveCmd(args []string) error {
 
 	fmt.Println(successStyle.Render(fmt.Sprintf("Removed key: %s (%s)", removedName, target)))
 	fmt.Println(hintStyle.Render("Data key rotated — all secrets re-encrypted."))
+	return nil
+}
+
+// --- Template command ---
+
+var templatePattern = regexp.MustCompile(`\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}`)
+
+func renderTemplate(tmpl string, secrets map[string]string) (string, error) {
+	var missing []string
+	result := templatePattern.ReplaceAllStringFunc(tmpl, func(match string) string {
+		key := templatePattern.FindStringSubmatch(match)[1]
+		val, ok := secrets[key]
+		if !ok {
+			missing = append(missing, key)
+			return match
+		}
+		return val
+	})
+	if len(missing) > 0 {
+		return "", errors.Newf("unresolved placeholders: %s", strings.Join(missing, ", "))
+	}
+	return result, nil
+}
+
+func cmdTemplate(templatePath string, encFile string) error {
+	secrets, err := loadSecrets(encFile)
+	if err != nil {
+		return err
+	}
+
+	var tmplBytes []byte
+	if templatePath == "-" {
+		tmplBytes, err = io.ReadAll(os.Stdin)
+	} else {
+		tmplBytes, err = os.ReadFile(templatePath)
+	}
+	if err != nil {
+		return errors.Wrap(err, "read template")
+	}
+
+	result, err := renderTemplate(string(tmplBytes), secrets)
+	if err != nil {
+		return err
+	}
+
+	fmt.Print(result)
 	return nil
 }

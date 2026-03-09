@@ -42,6 +42,7 @@ shh list                              # list secret names
 shh env                               # print export statements
 shh shell                             # open a shell with secrets loaded
 shh run -- <cmd> [args...]            # run a command with secrets injected
+shh template <file>                   # render a template with secrets substituted
 shh doctor                            # check your setup for common issues
 shh whoami                            # show your key and identity
 ```
@@ -78,6 +79,30 @@ shh run staging.env.enc -- ./deploy.sh
 ```
 
 `SHH_AGE_KEY` is automatically filtered out of the child process environment.
+
+### Templating
+
+`shh template` substitutes `{{SECRET_NAME}}` placeholders with decrypted values and writes to stdout — no plaintext file ever hits disk:
+
+```bash
+shh template config.yml.tpl | kubectl apply -f -
+shh template config.yml.tpl > config.yml
+cat config.yml.tpl | shh template -          # read from stdin
+shh template config.yml.tpl production.env.enc  # use a specific env file
+```
+
+Template file (`config.yml.tpl`):
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-app
+data:
+  api-key: {{API_KEY}}
+  db-password: {{DB_PASSWORD}}
+```
+
+Unresolved placeholders (referencing secrets that don't exist) cause an error listing the missing keys.
 
 ### Diagnostics
 
@@ -178,7 +203,7 @@ API_KEY = "base64-aes-256-gcm-ciphertext"
 - **GitHub integration** — `shh users add alice` fetches their public SSH key from GitHub and converts it to an age key. `shh login` auto-detects your identity via the `gh` CLI
 - **Encryption** uses [age](https://age-encryption.org) for key wrapping and AES-256-GCM for per-value encryption. Each recipient gets their own wrapped copy of the data key
 - **Integrity** is verified with HMAC-SHA256 on every decrypt
-- **`shh shell`** and **`shh run`** decrypt secrets into memory only — they exist as env vars in the subprocess and are gone when it exits
+- **`shh shell`**, **`shh run`**, and **`shh template`** decrypt secrets into memory only — they exist as env vars in the subprocess (or stdout output) and are gone when it exits
 - **`shh env`** warns when stdout is piped to a non-TTY (suppress with `-q`)
 
 ## License
