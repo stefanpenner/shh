@@ -217,6 +217,7 @@ func newRootCmd() *cobra.Command {
 	usersCmd := &cobra.Command{
 		Use:   "users",
 		Short: "Manage authorized users",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return usersListCmd()
 		},
@@ -240,9 +241,10 @@ func newRootCmd() *cobra.Command {
 	})
 
 	usersCmd.AddCommand(&cobra.Command{
-		Use:   "remove <user|#>",
-		Short: "Remove a user",
-		Args:  cobra.ExactArgs(1),
+		Use:     "remove <user|#>",
+		Aliases: []string{"rm"},
+		Short:   "Remove a user",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return usersRemoveCmd(args)
 		},
@@ -1386,7 +1388,7 @@ func usersRemoveCmd(args []string) error {
 	var removedName string
 	newRecipients := make(map[string]string)
 	for name, pk := range ef.Recipients {
-		if pk == target || name == target {
+		if pk == target || name == target || recipientDisplayName(name) == target {
 			removedName = name
 		} else {
 			newRecipients[name] = pk

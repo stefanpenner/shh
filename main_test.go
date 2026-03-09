@@ -808,6 +808,162 @@ func TestIntegration_UsersRemoveRotatesDataKey(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestIntegration_UsersAddRemoveLifecycle(t *testing.T) {
+	useTempDir(t)
+
+	priv1, pub1 := generateTestKey(t)
+	priv2, pub2 := generateTestKey(t)
+
+	// --- Setup: create file with user1 and user2, with a secret ---
+	setTestAgeKey(t, priv1)
+	secrets := map[string]string{"SECRET": "lifecycle-test"}
+	recipients := map[string]string{
+		"https://github.com/alice": pub1,
+		"https://github.com/bob":   pub2,
+	}
+	ef, err := encryptSecrets(secrets, recipients)
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(".env.enc", ef))
+
+	// Both users can decrypt
+	setTestAgeKey(t, priv1)
+	loaded, err := loadEncryptedFile(".env.enc")
+	require.NoError(t, err)
+	dec, err := decryptSecrets(loaded)
+	require.NoError(t, err)
+	assert.Equal(t, "lifecycle-test", dec["SECRET"])
+
+	setTestAgeKey(t, priv2)
+	loaded, err = loadEncryptedFile(".env.enc")
+	require.NoError(t, err)
+	dec, err = decryptSecrets(loaded)
+	require.NoError(t, err)
+	assert.Equal(t, "lifecycle-test", dec["SECRET"])
+
+	// --- Remove bob by bare username ---
+	setTestAgeKey(t, priv1)
+	err = usersRemoveCmd([]string{"bob"})
+	require.NoError(t, err)
+
+	// alice can still decrypt
+	setTestAgeKey(t, priv1)
+	loaded, err = loadEncryptedFile(".env.enc")
+	require.NoError(t, err)
+	dec, err = decryptSecrets(loaded)
+	require.NoError(t, err)
+	assert.Equal(t, "lifecycle-test", dec["SECRET"])
+
+	// bob can no longer decrypt
+	setTestAgeKey(t, priv2)
+	loaded, err = loadEncryptedFile(".env.enc")
+	require.NoError(t, err)
+	_, err = decryptSecrets(loaded)
+	assert.Error(t, err, "removed user should not be able to decrypt")
+
+	// --- Re-add bob (simulating usersAddCmd without GitHub fetch) ---
+	setTestAgeKey(t, priv1)
+	loaded, err = loadEncryptedFile(".env.enc")
+	require.NoError(t, err)
+	newRecipients := make(map[string]string, len(loaded.Recipients)+1)
+	for k, v := range loaded.Recipients {
+		newRecipients[k] = v
+	}
+	newRecipients["https://github.com/bob"] = pub2
+	err = reWrapDataKey(loaded, newRecipients)
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(".env.enc", loaded))
+
+	// bob can decrypt again
+	setTestAgeKey(t, priv2)
+	loaded, err = loadEncryptedFile(".env.enc")
+	require.NoError(t, err)
+	dec, err = decryptSecrets(loaded)
+	require.NoError(t, err)
+	assert.Equal(t, "lifecycle-test", dec["SECRET"])
+
+	// alice can still decrypt too
+	setTestAgeKey(t, priv1)
+	loaded, err = loadEncryptedFile(".env.enc")
+	require.NoError(t, err)
+	dec, err = decryptSecrets(loaded)
+	require.NoError(t, err)
+	assert.Equal(t, "lifecycle-test", dec["SECRET"])
+}
+
+func TestIntegration_UsersRemoveByGitHubUsername(t *testing.T) {
+	useTempDir(t)
+
+	priv1, pub1 := generateTestKey(t)
+	_, pub2 := generateTestKey(t)
+
+	setTestAgeKey(t, priv1)
+	secrets := map[string]string{"SECRET": "hello"}
+	// Simulate how `users add` stores GitHub users: name is "https://github.com/<username>"
+	recipients := map[string]string{"https://github.com/alice": pub1, "https://github.com/rwjblue": pub2}
+	ef, err := encryptSecrets(secrets, recipients)
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(".env.enc", ef))
+
+	// Remove by bare GitHub username (the way users actually type it)
+	err = usersRemoveCmd([]string{"rwjblue"})
+	require.NoError(t, err)
+
+	// Verify rwjblue was removed
+	reloaded, err := loadEncryptedFile(".env.enc")
+	require.NoError(t, err)
+	assert.Len(t, reloaded.Recipients, 1)
+	_, hasAlice := reloaded.Recipients["https://github.com/alice"]
+	assert.True(t, hasAlice, "alice should remain")
+	_, hasRwjblue := reloaded.Recipients["https://github.com/rwjblue"]
+	assert.False(t, hasRwjblue, "rwjblue should be removed")
+}
+
+func TestIntegration_UsersRemoveByDisplayName(t *testing.T) {
+	useTempDir(t)
+
+	priv1, pub1 := generateTestKey(t)
+	_, pub2 := generateTestKey(t)
+
+	setTestAgeKey(t, priv1)
+	secrets := map[string]string{"SECRET": "hello"}
+	recipients := map[string]string{"https://github.com/alice": pub1, "https://github.com/bob": pub2}
+	ef, err := encryptSecrets(secrets, recipients)
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(".env.enc", ef))
+
+	// Remove by full URL name (should still work)
+	err = usersRemoveCmd([]string{"https://github.com/bob"})
+	require.NoError(t, err)
+
+	reloaded, err := loadEncryptedFile(".env.enc")
+	require.NoError(t, err)
+	assert.Len(t, reloaded.Recipients, 1)
+}
+
+func TestIntegration_UsersRemoveByNumber(t *testing.T) {
+	useTempDir(t)
+
+	priv1, pub1 := generateTestKey(t)
+	_, pub2 := generateTestKey(t)
+
+	setTestAgeKey(t, priv1)
+	secrets := map[string]string{"SECRET": "hello"}
+	recipients := map[string]string{"https://github.com/alice": pub1, "https://github.com/bob": pub2}
+	ef, err := encryptSecrets(secrets, recipients)
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(".env.enc", ef))
+
+	// Remove by number (bob is #2 alphabetically: alice=1, bob=2)
+	err = usersRemoveCmd([]string{"2"})
+	require.NoError(t, err)
+
+	reloaded, err := loadEncryptedFile(".env.enc")
+	require.NoError(t, err)
+	assert.Len(t, reloaded.Recipients, 1)
+	_, hasAlice := reloaded.Recipients["https://github.com/alice"]
+	assert.True(t, hasAlice)
+}
+
 func TestFindEncFile_WalksUp(t *testing.T) {
 	dir := t.TempDir()
 	// Resolve symlinks (macOS /var -> /private/var) to match os.Getwd()
