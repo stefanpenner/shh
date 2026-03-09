@@ -12,6 +12,8 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
+    outputs:
+      report: ${{ steps.report.outputs.SCAN_REPORT }}
     steps:
       - uses: actions/checkout@v4
 
@@ -26,16 +28,28 @@ jobs:
           go install github.com/securego/gosec/v2/cmd/gosec@latest
           go install honnef.co/go/tools/cmd/staticcheck@latest
 
-      - name: Run govulncheck
-        run: govulncheck ./...
+      - name: Run scans
+        id: report
+        run: |
+          {
+            echo 'SCAN_REPORT<<SCAN_EOF'
 
-      - name: Run gosec
-        run: gosec -exclude=G104 ./...
+            echo '## govulncheck'
+            govulncheck ./... 2>&1 || true
+            echo ''
 
-      - name: Run staticcheck
-        run: staticcheck ./...
+            echo '## gosec'
+            gosec -fmt=json ./... 2>&1 || true
+            echo ''
+
+            echo '## staticcheck'
+            staticcheck ./... 2>&1 || true
+
+            echo 'SCAN_EOF'
+          } >> "$GITHUB_OUTPUT"
 
   ai-security-review:
+    needs: scan
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     permissions:
@@ -46,12 +60,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Read security prompt
-        id: prompt
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      - name: Build prompt with scan results
         run: |
           {
             echo 'SECURITY_PROMPT<<EOF'
             cat .github/security-review-prompt.md
+            echo ''
+            echo '## Static analysis results'
+            echo ''
+            echo 'The following findings were reported by govulncheck, gosec, and staticcheck.'
+            echo 'Triage each finding: fix real issues, and add // nolint or #nosec annotations'
+            echo 'with justifications for false positives. Include all fixes in your PR.'
+            echo ''
+            echo '```'
+            echo '${{ needs.scan.outputs.report }}'
+            echo '```'
             echo 'EOF'
           } >> "$GITHUB_ENV"
 
