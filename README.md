@@ -123,12 +123,34 @@ shh logout                            # remove key from OS keyring
 shh whoami                            # show your key and identity
 ```
 
+## Git Merge Support
+
+`.env.enc` files are designed to be merge-friendly:
+
+- **Per-recipient wrapped keys** — each recipient's data key is wrapped individually, so adding different teammates on different branches won't conflict
+- **Auto-resolve** — if a merge conflict occurs, any `shh` command automatically detects it, decrypts all three versions (ancestor/ours/theirs), performs a semantic 3-way merge, and stages the resolved file
+- **True conflicts** (same secret modified differently on both branches) are reported clearly so you can fix them manually
+
+For proactive conflict prevention, configure the built-in merge driver:
+
+```bash
+# .gitattributes (commit this)
+*.env.enc merge=shh
+
+# ~/.gitconfig (each developer)
+[merge "shh"]
+    name = shh encrypted env merge
+    driver = shh merge %O %A %B
+```
+
+Even without the merge driver, conflicts are resolved automatically on the next `shh` command.
+
 ## How It Works
 
-- **One file** — `.env.enc` is a TOML file containing encrypted secrets, recipients, and the wrapped data key
+- **One file** — `.env.enc` is a TOML file containing encrypted secrets, per-recipient wrapped keys, and an HMAC
 - **Private keys** stay in your OS keyring (macOS Keychain, GNOME/KDE Secret Service, Windows Credential Manager). Set `SHH_AGE_KEY` to override for CI/Docker. Set `SHH_PLAINTEXT` to point at a plain `.env` file to skip decryption entirely (useful for CI/testing)
 - **GitHub integration** — `shh users add alice` fetches their public SSH key from GitHub and converts it to an age key. `shh login` auto-detects your identity via the `gh` CLI
-- **Encryption** uses [age](https://age-encryption.org) for key wrapping and AES-256-GCM for per-value encryption
+- **Encryption** uses [age](https://age-encryption.org) for key wrapping and AES-256-GCM for per-value encryption. Each recipient gets their own wrapped copy of the data key
 - **Integrity** is verified with HMAC-SHA256 on every decrypt
 - **`shh shell`** and **`shh run`** decrypt secrets into memory only — they exist as env vars in the subprocess and are gone when it exits
 - **`shh env`** warns when stdout is piped to a non-TTY (suppress with `-q`)
