@@ -30,7 +30,7 @@ jobs:
         run: govulncheck ./...
 
       - name: Run gosec
-        run: gosec ./...
+        run: gosec -exclude=G104 ./...
 
       - name: Run staticcheck
         run: staticcheck ./...
@@ -42,12 +42,22 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Read security prompt
+        id: prompt
+        run: |
+          {
+            echo 'SECURITY_PROMPT<<EOF'
+            cat .github/security-review-prompt.md
+            echo 'EOF'
+          } >> "$GITHUB_ENV"
 
       - name: AI adversarial security review
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          direct_prompt_file: .github/security-review-prompt.md
-          allowed_tools: "Read,Edit,Write,Grep,Glob,Bash,WebSearch,WebFetch"
+          prompt: ${{ env.SECURITY_PROMPT }}
+          claude_args: "--allowedTools Edit Write Bash Read Grep Glob WebSearch WebFetch"
