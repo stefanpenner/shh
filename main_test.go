@@ -847,6 +847,23 @@ func TestFindEncFile_FallsBack(t *testing.T) {
 	assert.Equal(t, defaultEncryptedFile, found)
 }
 
+func TestRecipientDisplayName(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+	}{
+		{"https://github.com/alice", "alice"},
+		{"https://github.com/stefanpenner", "stefanpenner"},
+		{"age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq", "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"},
+		{"legacy-name", "legacy-name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, recipientDisplayName(tt.name))
+		})
+	}
+}
+
 func TestPublicKeyFrom(t *testing.T) {
 	identity, err := age.GenerateX25519Identity()
 	require.NoError(t, err)
