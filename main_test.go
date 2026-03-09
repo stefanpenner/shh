@@ -2036,3 +2036,104 @@ func TestLoadSecrets_EmptyPlaintext(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, secrets)
 }
+
+// --- Template tests ---
+
+func TestRenderTemplate(t *testing.T) {
+	secrets := map[string]string{"API_KEY": "abc123", "DB_PASSWORD": "s3cret"}
+	result, err := renderTemplate("key={{API_KEY}} pass={{DB_PASSWORD}}", secrets)
+	require.NoError(t, err)
+	assert.Equal(t, "key=abc123 pass=s3cret", result)
+}
+
+func TestRenderTemplateNoPlaceholders(t *testing.T) {
+	result, err := renderTemplate("no placeholders here", map[string]string{"FOO": "bar"})
+	require.NoError(t, err)
+	assert.Equal(t, "no placeholders here", result)
+}
+
+func TestRenderTemplateMissingSecret(t *testing.T) {
+	_, err := renderTemplate("{{FOO}} {{BAR}} {{BAZ}}", map[string]string{"FOO": "ok"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "BAR")
+	assert.Contains(t, err.Error(), "BAZ")
+	assert.NotContains(t, err.Error(), "FOO")
+}
+
+func TestRenderTemplatePartialBraces(t *testing.T) {
+	result, err := renderTemplate("{{ not valid }} and {NOPE} and {{OK}}", map[string]string{"OK": "yes"})
+	require.NoError(t, err)
+	assert.Equal(t, "{{ not valid }} and {NOPE} and yes", result)
+}
+
+func TestRenderTemplateRepeatedKey(t *testing.T) {
+	result, err := renderTemplate("{{X}}-{{X}}-{{X}}", map[string]string{"X": "v"})
+	require.NoError(t, err)
+	assert.Equal(t, "v-v-v", result)
+}
+
+func TestRenderTemplateEmptyValue(t *testing.T) {
+	result, err := renderTemplate("before{{KEY}}after", map[string]string{"KEY": ""})
+	require.NoError(t, err)
+	assert.Equal(t, "beforeafter", result)
+}
+
+func TestRenderTemplateSpecialChars(t *testing.T) {
+	val := `"quotes" & <xml> 'yaml': {json}`
+	result, err := renderTemplate("val={{SECRET}}", map[string]string{"SECRET": val})
+	require.NoError(t, err)
+	assert.Equal(t, "val="+val, result)
+}
+
+func TestCmdTemplate(t *testing.T) {
+	dir := useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+	setupEncryptedFile(t, ".env.enc", map[string]string{"API_KEY": "my-key", "DB_PASS": "secret"}, pubKey)
+
+	tplPath := filepath.Join(dir, "config.tpl")
+	require.NoError(t, os.WriteFile(tplPath, []byte("api={{API_KEY}} db={{DB_PASS}}"), 0600))
+
+	// Capture stdout
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := cmdTemplate(tplPath, ".env.enc")
+	w.Close()
+	os.Stdout = oldStdout
+
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+	assert.Equal(t, "api=my-key db=secret", buf.String())
+}
+
+func TestCmdTemplateStdin(t *testing.T) {
+	useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+	setupEncryptedFile(t, ".env.enc", map[string]string{"TOKEN": "tok123"}, pubKey)
+
+	// Replace stdin
+	oldStdin := os.Stdin
+	r, w, _ := os.Pipe()
+	w.Write([]byte("token={{TOKEN}}"))
+	w.Close()
+	os.Stdin = r
+
+	// Capture stdout
+	oldStdout := os.Stdout
+	rOut, wOut, _ := os.Pipe()
+	os.Stdout = wOut
+
+	err := cmdTemplate("-", ".env.enc")
+	wOut.Close()
+	os.Stdout = oldStdout
+	os.Stdin = oldStdin
+
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	buf.ReadFrom(rOut)
+	assert.Equal(t, "token=tok123", buf.String())
+}
