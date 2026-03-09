@@ -47,8 +47,7 @@ var (
 	headerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Underline(true)
 	keyStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
 	nameStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	youStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
-	hintStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Italic(true)
+	youStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
 
 	// Validation patterns
 	ageKeyPattern     = regexp.MustCompile(`^age1[a-z0-9]{58}$`)
@@ -487,21 +486,21 @@ func saveEncryptedFile(path string, ef *EncryptedFile) error {
 	tmpName := tmp.Name()
 
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		tmp.Close()      // #nosec G104 -- cleanup in error path; primary error already captured
+		os.Remove(tmpName) // #nosec G104 -- best-effort cleanup; primary error already captured
 		return errors.Wrap(err, "write temp file")
 	}
 	if err := tmp.Chmod(0600); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		tmp.Close()      // #nosec G104 -- cleanup in error path; primary error already captured
+		os.Remove(tmpName) // #nosec G104 -- best-effort cleanup; primary error already captured
 		return errors.Wrap(err, "chmod temp file")
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
+		os.Remove(tmpName) // #nosec G104 -- best-effort cleanup; primary error already captured
 		return errors.Wrap(err, "close temp file")
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
+		os.Remove(tmpName) // #nosec G104 -- best-effort cleanup; primary error already captured
 		return errors.Wrap(err, "rename temp file")
 	}
 	return nil
@@ -691,10 +690,10 @@ func runInit(cmd *cobra.Command, args []string) error {
 		if sshKey == "" {
 			sshKey = filepath.Join(os.Getenv("HOME"), ".ssh", "id_ed25519")
 		}
-		if _, err := os.Stat(sshKey); err != nil {
+		if _, err := os.Stat(sshKey); err != nil { // #nosec G703,G304 -- user explicitly supplies their own SSH key path via --from-ssh flag
 			return errors.Newf("SSH key not found: %s", sshKey)
 		}
-		sshKeyData, err := os.ReadFile(sshKey)
+		sshKeyData, err := os.ReadFile(sshKey) // #nosec G703,G304 -- user explicitly supplies their own SSH key path via --from-ssh flag
 		if err != nil {
 			return errors.Wrap(err, "read SSH key")
 		}
@@ -732,7 +731,7 @@ func cmdEncrypt(src string) error {
 		return errors.Newf("file not found: %s", src)
 	}
 
-	plaintext, err := os.ReadFile(src)
+	plaintext, err := os.ReadFile(src) // #nosec G304 -- src is a CLI argument; user intentionally points to their own .env file
 	if err != nil {
 		return errors.Wrap(err, "read file")
 	}
@@ -830,16 +829,18 @@ func cmdEdit(file string) error {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		os.Remove(tmpPath)
+		os.Remove(tmpPath) // #nosec G104 -- signal handler cannot propagate errors; best-effort cleanup
 		os.Exit(1)
 	}()
 	defer signal.Stop(sigCh)
 
 	if _, err := tmpFile.WriteString(formatPlaintext(secrets)); err != nil {
-		tmpFile.Close()
+		tmpFile.Close() // #nosec G104 -- cleanup in error path; primary error already captured
 		return errors.Wrap(err, "write temp file")
 	}
-	tmpFile.Close()
+	if err := tmpFile.Close(); err != nil {
+		return errors.Wrap(err, "close temp file")
+	}
 
 	infoBefore, err := os.Stat(tmpPath)
 	if err != nil {
@@ -850,7 +851,7 @@ func cmdEdit(file string) error {
 	if editor == "" {
 		editor = "vi"
 	}
-	editorCmd := exec.Command(editor, tmpPath)
+	editorCmd := exec.Command(editor, tmpPath) // #nosec G702,G204 -- EDITOR is a standard Unix convention for user-chosen editor; tmpPath is program-controlled (os.CreateTemp)
 	editorCmd.Stdin = os.Stdin
 	editorCmd.Stdout = os.Stdout
 	editorCmd.Stderr = os.Stderr
@@ -868,7 +869,7 @@ func cmdEdit(file string) error {
 		return nil
 	}
 
-	edited, err := os.ReadFile(tmpPath)
+	edited, err := os.ReadFile(tmpPath) // #nosec G304 -- tmpPath is program-controlled (created by os.CreateTemp above)
 	if err != nil {
 		return errors.Wrap(err, "read edited file")
 	}
@@ -982,7 +983,7 @@ func cmdShell(file string) error {
 	}
 
 	fmt.Println(successStyle.Render("Secrets loaded.") + " Type 'exit' to end session.")
-	return syscall.Exec(shell, []string{shell}, env)
+	return syscall.Exec(shell, []string{shell}, env) // #nosec G702,G204 -- SHELL is a standard Unix convention for user's preferred shell; user owns their environment
 }
 
 // --- Key Management ---
