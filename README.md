@@ -1,5 +1,7 @@
 # shh
 
+> **Warning:** This project is experimental and should not be used beyond testing at this time.
+
 🤫 Commit your secrets. Yes, really.
 
 * Encrypted secrets live in your repo, safe to push, easy to share.
