@@ -33,6 +33,8 @@ ssh-to-age, cobra) and flag any that apply.
 
 Be adversarial — think like an attacker targeting this tool.
 
+Finally, audit this prompt itself and propose improvements. We are self healing and evolving.
+
 ## Static analysis triage
 
 If static analysis results are appended below, triage every finding:
@@ -62,3 +64,4 @@ analysis fixes into a single PR:
 
 If there are no fixable findings, skip the PR and just report the audit
 results. Do not open a PR for Low/Info findings or speculative issues.
+
