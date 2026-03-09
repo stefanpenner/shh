@@ -41,6 +41,8 @@ shh edit                              # edit all secrets in $EDITOR
 shh list                              # list secret names
 shh env                               # print export statements
 shh shell                             # open a shell with secrets loaded
+shh run -- <cmd> [args...]            # run a command with secrets injected
+shh doctor                            # check your setup for common issues
 shh whoami                            # show your key and identity
 ```
 
@@ -51,11 +53,39 @@ shh set KEY value staging.env.enc
 shh shell staging.env.enc
 ```
 
+Or use `-e` to select an environment by name:
+
+```bash
+shh list -e production                # reads production.env.enc
+shh shell -e staging                  # opens shell with staging.env.enc
+shh run -e production -- node app.js  # runs with production secrets
+```
+
 Already have a `.env` file? Encrypt it:
 
 ```bash
 shh encrypt .env                      # creates .env.enc (then delete .env)
 ```
+
+### Running commands
+
+`shh run` injects secrets into a single command without starting a subshell:
+
+```bash
+shh run -- node server.js
+shh run -- docker compose up
+shh run staging.env.enc -- ./deploy.sh
+```
+
+`SHH_AGE_KEY` is automatically filtered out of the child process environment.
+
+### Diagnostics
+
+```bash
+shh doctor
+```
+
+Checks your age key, GitHub CLI auth, SSH keys, encrypted file, and whether your key is in the recipients list. Useful for onboarding and debugging access issues.
 
 ## Team Workflow
 
@@ -96,11 +126,12 @@ shh whoami                            # show your key and identity
 ## How It Works
 
 - **One file** — `.env.enc` is a TOML file containing encrypted secrets, recipients, and the wrapped data key
-- **Private keys** stay in your OS keyring (macOS Keychain, GNOME/KDE Secret Service, Windows Credential Manager). Set `SHH_AGE_KEY` to override for CI/Docker
+- **Private keys** stay in your OS keyring (macOS Keychain, GNOME/KDE Secret Service, Windows Credential Manager). Set `SHH_AGE_KEY` to override for CI/Docker. Set `SHH_PLAINTEXT` to point at a plain `.env` file to skip decryption entirely (useful for CI/testing)
 - **GitHub integration** — `shh users add alice` fetches their public SSH key from GitHub and converts it to an age key. `shh login` auto-detects your identity via the `gh` CLI
 - **Encryption** uses [age](https://age-encryption.org) for key wrapping and AES-256-GCM for per-value encryption
 - **Integrity** is verified with HMAC-SHA256 on every decrypt
-- **`shh shell`** decrypts secrets into memory only — they exist as env vars in the subshell and are gone when you exit
+- **`shh shell`** and **`shh run`** decrypt secrets into memory only — they exist as env vars in the subprocess and are gone when it exits
+- **`shh env`** warns when stdout is piped to a non-TTY (suppress with `-q`)
 
 ## License
 

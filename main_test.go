@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/rand"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"filippo.io/age"
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
@@ -1282,4 +1284,408 @@ func TestSshKeyToAge_ProtectedAndUnprotectedProduceSameResult(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, *pubUnprotected, *pubProtected, "same key should produce same age public key")
+}
+
+// --- Helper: setupEncryptedFile ---
+
+func setupEncryptedFile(t *testing.T, file string, secrets map[string]string, pubKey string) {
+	t.Helper()
+	recipients := map[string]string{"test-user": pubKey}
+	ef, err := encryptSecrets(secrets, recipients)
+	require.NoError(t, err)
+	err = saveEncryptedFile(file, ef)
+	require.NoError(t, err)
+}
+
+// --- Run command tests ---
+
+func TestCmdRun_ExecutesCommand(t *testing.T) {
+	useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+	setupEncryptedFile(t, ".env.enc", map[string]string{"FOO": "bar"}, pubKey)
+
+	err := cmdRun(".env.enc", []string{"true"})
+	assert.NoError(t, err)
+}
+
+func TestCmdRun_SetsEnvVars(t *testing.T) {
+	useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+	setupEncryptedFile(t, ".env.enc", map[string]string{"MY_SECRET": "s3cret_value"}, pubKey)
+
+	err := cmdRun(".env.enc", []string{"printenv", "MY_SECRET"})
+	assert.NoError(t, err)
+}
+
+func TestCmdRun_FiltersShhAgeKey(t *testing.T) {
+	useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+	setupEncryptedFile(t, ".env.enc", map[string]string{"FOO": "bar"}, pubKey)
+
+	err := cmdRun(".env.enc", []string{"printenv", "SHH_AGE_KEY"})
+	assert.Error(t, err, "SHH_AGE_KEY should not be in child environment")
+}
+
+func TestCmdRun_NoArgs(t *testing.T) {
+	err := cmdRun(".env.enc", nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no command specified")
+}
+
+func TestCmdRun_NonZeroExit(t *testing.T) {
+	useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+	setupEncryptedFile(t, ".env.enc", map[string]string{"FOO": "bar"}, pubKey)
+
+	err := cmdRun(".env.enc", []string{"false"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "exited with status")
+}
+
+func TestCmdRun_CommandNotFound(t *testing.T) {
+	useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+	setupEncryptedFile(t, ".env.enc", map[string]string{"FOO": "bar"}, pubKey)
+
+	err := cmdRun(".env.enc", []string{"nonexistent_command_xyz_12345"})
+	assert.Error(t, err)
+}
+
+func TestParseRunArgs(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		wantFile string
+		wantCmd  []string
+	}{
+		{
+			name:     "no args",
+			args:     nil,
+			wantFile: "",
+			wantCmd:  nil,
+		},
+		{
+			name:     "command only, no separator",
+			args:     []string{"echo", "hello"},
+			wantFile: "",
+			wantCmd:  []string{"echo", "hello"},
+		},
+		{
+			name:     "separator with command",
+			args:     []string{"--", "echo", "hello"},
+			wantFile: "",
+			wantCmd:  []string{"echo", "hello"},
+		},
+		{
+			name:     "file and separator with command",
+			args:     []string{"secrets.enc", "--", "echo", "hello"},
+			wantFile: "secrets.enc",
+			wantCmd:  []string{"echo", "hello"},
+		},
+		{
+			name:     "separator only",
+			args:     []string{"--"},
+			wantFile: "",
+			wantCmd:  nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file, cmd := parseRunArgs(tt.args)
+			assert.Equal(t, tt.wantFile, file)
+			assert.Equal(t, tt.wantCmd, cmd)
+		})
+	}
+}
+
+// --- Doctor tests ---
+
+func TestRunDoctorChecks_AllPass(t *testing.T) {
+	dir := useTempDir(t)
+
+	privKey, pubKey := generateTestKey(t)
+
+	setTestAgeKey(t, privKey)
+	secrets := map[string]string{"SECRET": "hello"}
+	recipients := map[string]string{"https://github.com/alice": pubKey}
+	ef, err := encryptSecrets(secrets, recipients)
+	require.NoError(t, err)
+	encFile := filepath.Join(dir, ".env.enc")
+	require.NoError(t, saveEncryptedFile(encFile, ef))
+
+	checks := runDoctorChecks(
+		func() (string, error) { return privKey, nil },
+		func() string { return "alice" },
+		func() []string { return []string{"/home/alice/.ssh/id_ed25519"} },
+		encFile,
+	)
+
+	require.Len(t, checks, 5)
+	assert.True(t, checks[0].Status, "age key check should pass")
+	assert.Equal(t, "age key", checks[0].Name)
+	assert.Contains(t, checks[0].Message, "age1")
+
+	assert.True(t, checks[1].Status, "github cli check should pass")
+	assert.Equal(t, "github cli", checks[1].Name)
+	assert.Equal(t, "alice", checks[1].Message)
+
+	assert.True(t, checks[2].Status, "ssh keys check should pass")
+	assert.Equal(t, "ssh keys", checks[2].Name)
+	assert.Contains(t, checks[2].Message, "1 ed25519 key(s) found")
+
+	assert.True(t, checks[3].Status, "encrypted file check should pass")
+	assert.Equal(t, "encrypted file", checks[3].Name)
+	assert.Contains(t, checks[3].Message, "1 secret")
+	assert.Contains(t, checks[3].Message, "1 recipient")
+
+	assert.True(t, checks[4].Status, "recipient check should pass")
+	assert.Equal(t, "recipient", checks[4].Name)
+	assert.Equal(t, "your key is authorized", checks[4].Message)
+}
+
+func TestRunDoctorChecks_NoKey(t *testing.T) {
+	checks := runDoctorChecks(
+		func() (string, error) { return "", errors.New("no key") },
+		func() string { return "alice" },
+		func() []string { return []string{"/home/alice/.ssh/id_ed25519"} },
+		"/nonexistent/.env.enc",
+	)
+
+	assert.False(t, checks[0].Status, "age key check should fail")
+	assert.Equal(t, "age key", checks[0].Name)
+	assert.Contains(t, checks[0].Message, "no key found")
+}
+
+func TestRunDoctorChecks_NoGitHub(t *testing.T) {
+	privKey, _ := generateTestKey(t)
+
+	checks := runDoctorChecks(
+		func() (string, error) { return privKey, nil },
+		func() string { return "" },
+		func() []string { return []string{"/home/alice/.ssh/id_ed25519"} },
+		"/nonexistent/.env.enc",
+	)
+
+	assert.True(t, checks[0].Status, "age key check should pass")
+	assert.False(t, checks[1].Status, "github cli check should fail")
+	assert.Equal(t, "github cli", checks[1].Name)
+	assert.Contains(t, checks[1].Message, "not installed or not logged in")
+}
+
+func TestRunDoctorChecks_NoSSHKeys(t *testing.T) {
+	privKey, _ := generateTestKey(t)
+
+	checks := runDoctorChecks(
+		func() (string, error) { return privKey, nil },
+		func() string { return "alice" },
+		func() []string { return nil },
+		"/nonexistent/.env.enc",
+	)
+
+	assert.True(t, checks[0].Status, "age key check should pass")
+	assert.True(t, checks[1].Status, "github cli check should pass")
+	assert.False(t, checks[2].Status, "ssh keys check should fail")
+	assert.Equal(t, "ssh keys", checks[2].Name)
+	assert.Contains(t, checks[2].Message, "no ed25519 keys found")
+}
+
+func TestRunDoctorChecks_NoEncFile(t *testing.T) {
+	privKey, _ := generateTestKey(t)
+
+	checks := runDoctorChecks(
+		func() (string, error) { return privKey, nil },
+		func() string { return "alice" },
+		func() []string { return []string{"/home/alice/.ssh/id_ed25519"} },
+		"/nonexistent/.env.enc",
+	)
+
+	assert.True(t, checks[0].Status, "age key check should pass")
+	assert.True(t, checks[1].Status, "github cli check should pass")
+	assert.True(t, checks[2].Status, "ssh keys check should pass")
+	assert.False(t, checks[3].Status, "encrypted file check should fail")
+	assert.Equal(t, "encrypted file", checks[3].Name)
+	assert.Contains(t, checks[3].Message, "not found or invalid")
+	assert.Len(t, checks, 4)
+}
+
+func TestRunDoctorChecks_NotInRecipients(t *testing.T) {
+	dir := useTempDir(t)
+
+	privKey, _ := generateTestKey(t)
+	otherPriv, otherPub := generateTestKey(t)
+
+	setTestAgeKey(t, otherPriv)
+	secrets := map[string]string{"SECRET": "hello"}
+	recipients := map[string]string{"https://github.com/bob": otherPub}
+	ef, err := encryptSecrets(secrets, recipients)
+	require.NoError(t, err)
+	encFile := filepath.Join(dir, ".env.enc")
+	require.NoError(t, saveEncryptedFile(encFile, ef))
+
+	checks := runDoctorChecks(
+		func() (string, error) { return privKey, nil },
+		func() string { return "alice" },
+		func() []string { return []string{"/home/alice/.ssh/id_ed25519"} },
+		encFile,
+	)
+
+	require.Len(t, checks, 5)
+	assert.True(t, checks[3].Status, "encrypted file check should pass")
+	assert.False(t, checks[4].Status, "recipient check should fail")
+	assert.Equal(t, "recipient", checks[4].Name)
+	assert.Contains(t, checks[4].Message, "NOT in the recipients list")
+}
+
+// --- Env flag tests ---
+
+func TestEnvFlag(t *testing.T) {
+	assert.Equal(t, "", envFlag(""))
+	assert.Equal(t, "production.env.enc", envFlag("production"))
+	assert.Equal(t, "staging.env.enc", envFlag("staging"))
+}
+
+func TestResolveFile(t *testing.T) {
+	// env flag takes precedence
+	assert.Equal(t, "production.env.enc", resolveFile("production", []string{"other.enc"}))
+	// falls back to fileArg
+	assert.Equal(t, "other.enc", resolveFile("", []string{"other.enc"}))
+	// falls back to findEncFile when both empty
+	result := resolveFile("", nil)
+	assert.NotEmpty(t, result)
+}
+
+// --- TTY warning tests ---
+
+func TestCmdEnv_WarnsWhenNotTTY(t *testing.T) {
+	useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+
+	secrets := map[string]string{"SECRET": "hello"}
+	ef, err := encryptSecrets(secrets, map[string]string{"testuser": pubKey})
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(".env.enc", ef))
+
+	var stderr bytes.Buffer
+	err = cmdEnv(".env.enc", &stderr, func() bool { return false }, false)
+	require.NoError(t, err)
+	assert.Contains(t, stderr.String(), "warning:")
+}
+
+func TestCmdEnv_NoWarningWhenTTY(t *testing.T) {
+	useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+
+	secrets := map[string]string{"SECRET": "hello"}
+	ef, err := encryptSecrets(secrets, map[string]string{"testuser": pubKey})
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(".env.enc", ef))
+
+	var stderr bytes.Buffer
+	err = cmdEnv(".env.enc", &stderr, func() bool { return true }, false)
+	require.NoError(t, err)
+	assert.Empty(t, stderr.String())
+}
+
+func TestCmdEnv_QuietSuppressesWarning(t *testing.T) {
+	useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+
+	secrets := map[string]string{"SECRET": "hello"}
+	ef, err := encryptSecrets(secrets, map[string]string{"testuser": pubKey})
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(".env.enc", ef))
+
+	var stderr bytes.Buffer
+	err = cmdEnv(".env.enc", &stderr, func() bool { return false }, false)
+	require.NoError(t, err)
+	assert.Contains(t, stderr.String(), "warning:")
+
+	var stderr2 bytes.Buffer
+	err = cmdEnv(".env.enc", &stderr2, func() bool { return false }, true)
+	require.NoError(t, err)
+	assert.Empty(t, stderr2.String())
+}
+
+// --- LoadSecrets / SHH_PLAINTEXT tests ---
+
+func TestLoadSecrets_FromPlaintext(t *testing.T) {
+	dir := useTempDir(t)
+
+	plaintext := "FOO=bar\nBAZ=qux\n"
+	plaintextPath := filepath.Join(dir, ".env.test")
+	require.NoError(t, os.WriteFile(plaintextPath, []byte(plaintext), 0600))
+
+	os.Setenv("SHH_PLAINTEXT", plaintextPath)
+	t.Cleanup(func() { os.Unsetenv("SHH_PLAINTEXT") })
+
+	secrets, err := loadSecrets(".env.enc")
+	require.NoError(t, err)
+	assert.Equal(t, "bar", secrets["FOO"])
+	assert.Equal(t, "qux", secrets["BAZ"])
+}
+
+func TestLoadSecrets_FromEncrypted(t *testing.T) {
+	useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+
+	os.Unsetenv("SHH_PLAINTEXT")
+
+	secrets := map[string]string{"SECRET": "encrypted_value"}
+	ef, err := encryptSecrets(secrets, map[string]string{"testuser": pubKey})
+	require.NoError(t, err)
+	require.NoError(t, saveEncryptedFile(".env.enc", ef))
+
+	loaded, err := loadSecrets(".env.enc")
+	require.NoError(t, err)
+	assert.Equal(t, "encrypted_value", loaded["SECRET"])
+}
+
+func TestLoadSecrets_PlaintextFileNotFound(t *testing.T) {
+	os.Setenv("SHH_PLAINTEXT", "/nonexistent/path/.env")
+	t.Cleanup(func() { os.Unsetenv("SHH_PLAINTEXT") })
+
+	_, err := loadSecrets(".env.enc")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "read plaintext file")
+}
+
+func TestLoadSecrets_PlaintextWithComments(t *testing.T) {
+	dir := useTempDir(t)
+
+	plaintext := "# Database config\nDB_HOST=localhost\nDB_PORT=5432\n\n# API\nAPI_KEY=test-key\n"
+	path := filepath.Join(dir, ".env.test")
+	require.NoError(t, os.WriteFile(path, []byte(plaintext), 0600))
+
+	os.Setenv("SHH_PLAINTEXT", path)
+	t.Cleanup(func() { os.Unsetenv("SHH_PLAINTEXT") })
+
+	secrets, err := loadSecrets(".env.enc")
+	require.NoError(t, err)
+	assert.Equal(t, "localhost", secrets["DB_HOST"])
+	assert.Equal(t, "5432", secrets["DB_PORT"])
+	assert.Equal(t, "test-key", secrets["API_KEY"])
+	assert.Len(t, secrets, 3)
+}
+
+func TestLoadSecrets_EmptyPlaintext(t *testing.T) {
+	dir := useTempDir(t)
+
+	path := filepath.Join(dir, ".env.test")
+	require.NoError(t, os.WriteFile(path, []byte(""), 0600))
+
+	os.Setenv("SHH_PLAINTEXT", path)
+	t.Cleanup(func() { os.Unsetenv("SHH_PLAINTEXT") })
+
+	secrets, err := loadSecrets(".env.enc")
+	require.NoError(t, err)
+	assert.Empty(t, secrets)
 }

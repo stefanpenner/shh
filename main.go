@@ -146,72 +146,120 @@ func newRootCmd() *cobra.Command {
 	})
 
 	// list command
-	rootCmd.AddCommand(&cobra.Command{
+	listCmd := &cobra.Command{
 		Use:   "list [file]",
 		Short: "List secret keys (names only, no values)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdList(fileArg(args))
+			env, _ := cmd.Flags().GetString("env")
+			return cmdList(resolveFile(env, args))
 		},
-	})
+	}
+	listCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
+	rootCmd.AddCommand(listCmd)
 
 	// env command
-	rootCmd.AddCommand(&cobra.Command{
+	envCmd := &cobra.Command{
 		Use:   "env [file]",
 		Short: "Print secrets as export statements",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdEnv(fileArg(args))
+			env, _ := cmd.Flags().GetString("env")
+			quiet, _ := cmd.Flags().GetBool("quiet")
+			return cmdEnv(resolveFile(env, args), os.Stderr, func() bool {
+				return term.IsTerminal(int(os.Stdout.Fd()))
+			}, quiet)
 		},
-	})
+	}
+	envCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
+	envCmd.Flags().BoolP("quiet", "q", false, "Suppress non-TTY warning")
+	rootCmd.AddCommand(envCmd)
 
 	// edit command
-	rootCmd.AddCommand(&cobra.Command{
+	editCmd := &cobra.Command{
 		Use:   "edit [file]",
 		Short: "Edit secrets in $EDITOR",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdEdit(fileArg(args))
+			env, _ := cmd.Flags().GetString("env")
+			return cmdEdit(resolveFile(env, args))
 		},
-	})
+	}
+	editCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
+	rootCmd.AddCommand(editCmd)
 
 	// set command
-	rootCmd.AddCommand(&cobra.Command{
+	setCmd := &cobra.Command{
 		Use:   "set <KEY> <VALUE> [file]",
 		Short: "Add or update a secret",
 		Args:  cobra.RangeArgs(2, 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			file := findEncFile()
+			env, _ := cmd.Flags().GetString("env")
+			file := resolveFile(env, nil)
 			if len(args) > 2 {
 				file = args[2]
 			}
 			return cmdSet(file, args[0], args[1])
 		},
-	})
+	}
+	setCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
+	rootCmd.AddCommand(setCmd)
 
 	// rm command
-	rootCmd.AddCommand(&cobra.Command{
+	rmCmd := &cobra.Command{
 		Use:     "rm <KEY> [file]",
 		Aliases: []string{"unset"},
 		Short:   "Remove a secret",
-		Args:  cobra.RangeArgs(1, 2),
+		Args:    cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			file := findEncFile()
+			env, _ := cmd.Flags().GetString("env")
+			file := resolveFile(env, nil)
 			if len(args) > 1 {
 				file = args[1]
 			}
 			return cmdRm(file, args[0])
 		},
-	})
+	}
+	rmCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
+	rootCmd.AddCommand(rmCmd)
 
 	// shell command
-	rootCmd.AddCommand(&cobra.Command{
+	shellCmd := &cobra.Command{
 		Use:     "shell [file]",
 		Aliases: []string{"sh"},
 		Short:   "Start a subshell with secrets loaded",
-		Args:  cobra.MaximumNArgs(1),
+		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdShell(fileArg(args))
+			env, _ := cmd.Flags().GetString("env")
+			return cmdShell(resolveFile(env, args))
+		},
+	}
+	shellCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
+	rootCmd.AddCommand(shellCmd)
+
+	// run command
+	runCmd := &cobra.Command{
+		Use:                "run [file] -- <command> [args...]",
+		Short:              "Run a command with secrets in the environment",
+		DisableFlagParsing: true,
+		SilenceUsage:       true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			file, cmdArgs := parseRunArgs(args)
+			if len(cmdArgs) == 0 {
+				return errors.New("usage: shh run [file] -- <command> [args...]")
+			}
+			return cmdRun(file, cmdArgs)
+		},
+	}
+	rootCmd.AddCommand(runCmd)
+
+	// doctor command
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "doctor",
+		Short: "Check your shh setup for common issues",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdDoctor()
 		},
 	})
 
@@ -294,6 +342,20 @@ func fileArg(args []string) string {
 		return args[0]
 	}
 	return findEncFile()
+}
+
+func envFlag(envName string) string {
+	if envName == "" {
+		return ""
+	}
+	return envName + ".env.enc"
+}
+
+func resolveFile(envName string, args []string) string {
+	if envName != "" {
+		return envFlag(envName)
+	}
+	return fileArg(args)
 }
 
 func currentUsername() string {
@@ -805,6 +867,24 @@ func defaultRecipients() (map[string]string, error) {
 	return map[string]string{"https://github.com/" + username: pubKey}, nil
 }
 
+// loadSecrets loads secrets either from a plaintext file (if SHH_PLAINTEXT is set)
+// or by decrypting the encrypted file.
+func loadSecrets(encFile string) (map[string]string, error) {
+	if plainFile := os.Getenv("SHH_PLAINTEXT"); plainFile != "" {
+		data, err := os.ReadFile(plainFile)
+		if err != nil {
+			return nil, errors.Wrapf(err, "read plaintext file %s", plainFile)
+		}
+		return parsePlaintext(string(data)), nil
+	}
+
+	ef, err := loadEncryptedFile(encFile)
+	if err != nil {
+		return nil, err
+	}
+	return decryptSecrets(ef)
+}
+
 // --- Commands ---
 
 // ghUsername returns the GitHub username from `gh auth status`, or "" if unavailable.
@@ -1041,11 +1121,7 @@ func cmdEncrypt(src string) error {
 }
 
 func cmdList(file string) error {
-	ef, err := loadEncryptedFile(file)
-	if err != nil {
-		return err
-	}
-	secrets, err := decryptSecrets(ef)
+	secrets, err := loadSecrets(file)
 	if err != nil {
 		return err
 	}
@@ -1055,12 +1131,11 @@ func cmdList(file string) error {
 	return nil
 }
 
-func cmdEnv(file string) error {
-	ef, err := loadEncryptedFile(file)
-	if err != nil {
-		return err
+func cmdEnv(file string, stderr io.Writer, checkTTY func() bool, quiet bool) error {
+	if !quiet && !checkTTY() {
+		fmt.Fprintln(stderr, "warning: writing secrets to stdout (not a terminal)")
 	}
-	secrets, err := decryptSecrets(ef)
+	secrets, err := loadSecrets(file)
 	if err != nil {
 		return err
 	}
@@ -1251,11 +1326,7 @@ func cmdRm(file, key string) error {
 }
 
 func cmdShell(file string) error {
-	ef, err := loadEncryptedFile(file)
-	if err != nil {
-		return err
-	}
-	secrets, err := decryptSecrets(ef)
+	secrets, err := loadSecrets(file)
 	if err != nil {
 		return err
 	}
@@ -1272,6 +1343,146 @@ func cmdShell(file string) error {
 
 	fmt.Println(successStyle.Render("Secrets loaded.") + " Type 'exit' to end session.")
 	return syscall.Exec(shell, []string{shell}, env) // #nosec G702,G204 -- SHELL is a standard Unix convention for user's preferred shell; user owns their environment
+}
+
+// --- Run Command ---
+
+func parseRunArgs(args []string) (file string, cmdArgs []string) {
+	for i, a := range args {
+		if a == "--" {
+			if i > 0 {
+				file = args[0]
+			}
+			if i+1 < len(args) {
+				cmdArgs = args[i+1:]
+			}
+			return file, cmdArgs
+		}
+	}
+	// No -- separator: no file, all args are the command
+	if len(args) > 0 {
+		return "", args
+	}
+	return "", nil
+}
+
+func cmdRun(file string, args []string) error {
+	if len(args) == 0 {
+		return errors.New("no command specified (usage: shh run -- <command> [args...])")
+	}
+
+	secrets, err := loadSecrets(file)
+	if err != nil {
+		return err
+	}
+
+	env := filterEnv(os.Environ(), "SHH_AGE_KEY")
+	for k, v := range secrets {
+		env = append(env, k+"="+v)
+	}
+
+	cmd := exec.Command(args[0], args[1:]...) // #nosec G204 -- user provides the command to run
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = env
+
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return errors.Newf("command exited with status %d", exitErr.ExitCode())
+		}
+		return errors.Wrap(err, "run command")
+	}
+	return nil
+}
+
+// --- Doctor ---
+
+// DoctorCheck represents the result of a single diagnostic check.
+type DoctorCheck struct {
+	Name    string
+	Status  bool
+	Message string
+}
+
+func runDoctorChecks(getKeyFn func() (string, error), ghUsernameFn func() string, findSSHKeysFn func() []string, encFile string) []DoctorCheck {
+	var checks []DoctorCheck
+	var privKey string
+
+	// 1. Age key
+	key, err := getKeyFn()
+	if err != nil {
+		checks = append(checks, DoctorCheck{"age key", false, "no key found (run 'shh init')"})
+	} else {
+		privKey = key
+		pubKey, _ := publicKeyFrom(privKey)
+		checks = append(checks, DoctorCheck{"age key", true, pubKey})
+	}
+
+	// 2. GitHub CLI
+	username := ghUsernameFn()
+	if username == "" {
+		checks = append(checks, DoctorCheck{"github cli", false, "gh not installed or not logged in"})
+	} else {
+		checks = append(checks, DoctorCheck{"github cli", true, username})
+	}
+
+	// 3. SSH keys
+	sshKeys := findSSHKeysFn()
+	if len(sshKeys) == 0 {
+		checks = append(checks, DoctorCheck{"ssh keys", false, "no ed25519 keys found in ~/.ssh"})
+	} else {
+		checks = append(checks, DoctorCheck{"ssh keys", true, fmt.Sprintf("%d ed25519 key(s) found", len(sshKeys))})
+	}
+
+	// 4. Encrypted file
+	ef, err := loadEncryptedFile(encFile)
+	if err != nil {
+		checks = append(checks, DoctorCheck{"encrypted file", false, fmt.Sprintf("%s not found or invalid", encFile)})
+	} else {
+		checks = append(checks, DoctorCheck{"encrypted file", true, fmt.Sprintf("%s (%d secret(s), %d recipient(s))", encFile, len(ef.Secrets), len(ef.Recipients))})
+
+		// 5. Recipient check (only if file exists and we have a key)
+		if privKey != "" {
+			pubKey, _ := publicKeyFrom(privKey)
+			found := false
+			for _, pk := range ef.Recipients {
+				if pk == pubKey {
+					found = true
+					break
+				}
+			}
+			if found {
+				checks = append(checks, DoctorCheck{"recipient", true, "your key is authorized"})
+			} else {
+				checks = append(checks, DoctorCheck{"recipient", false, "your key is NOT in the recipients list"})
+			}
+		}
+	}
+
+	return checks
+}
+
+func cmdDoctor() error {
+	checks := runDoctorChecks(getKey, ghUsername, findSSHEd25519Keys, findEncFile())
+
+	hasFailure := false
+	for _, c := range checks {
+		var icon string
+		if c.Status {
+			icon = successStyle.Render("✓")
+		} else {
+			icon = errorStyle.Render("✗")
+			hasFailure = true
+		}
+		fmt.Printf("  %s %-16s %s\n", icon, c.Name, hintStyle.Render(c.Message))
+	}
+
+	if hasFailure {
+		return errors.New("some checks failed")
+	}
+	return nil
 }
 
 // --- Key Management ---
