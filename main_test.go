@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/hmac"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -250,6 +251,9 @@ func TestMarshalLoadRoundtrip(t *testing.T) {
 }
 
 func TestSaveEncryptedFile_Permissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file permissions not supported on Windows")
+	}
 	useTempDir(t)
 
 	ef := &EncryptedFile{
