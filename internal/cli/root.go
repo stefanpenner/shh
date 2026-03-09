@@ -218,14 +218,19 @@ func newRootCmd() *cobra.Command {
 		},
 	})
 
-	usersCmd.AddCommand(&cobra.Command{
-		Use:   "add <github-username | age-public-key>",
-		Short: "Add a user by GitHub username or age public key",
-		Args:  cobra.ExactArgs(1),
+	addCmd := &cobra.Command{
+		Use:   "add [github-username | age-public-key]",
+		Short: "Add a user by GitHub username, age public key, or generate a deploy key",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return usersAddCmd(args)
+			name, _ := cmd.Flags().GetString("name")
+			key, _ := cmd.Flags().GetString("key")
+			return usersAddCmd(args, name, key)
 		},
-	})
+	}
+	addCmd.Flags().String("name", "", "Name for a non-GitHub recipient (e.g. production-deploy)")
+	addCmd.Flags().String("key", "", "Age public key (optional with --name; generated if omitted)")
+	usersCmd.AddCommand(addCmd)
 
 	usersCmd.AddCommand(&cobra.Command{
 		Use:     "remove <user|#>",

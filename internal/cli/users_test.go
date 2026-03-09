@@ -156,10 +156,120 @@ func TestRecipientDisplayName(t *testing.T) {
 		{"https://github.com/stefanpenner", "stefanpenner"},
 		{"age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq", "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"},
 		{"legacy-name", "legacy-name"},
+		{"shh-user://production-deploy", "production-deploy"},
+		{"shh-user://ci", "ci"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, RecipientDisplayName(tt.name))
 		})
 	}
+}
+
+func TestUsersAddWithNameGeneratesKey(t *testing.T) {
+	useTempDir(t)
+
+	priv1, pub1 := generateTestKey(t)
+	setTestAgeKey(t, priv1)
+
+	// Create initial enc file with one recipient
+	secrets := map[string]string{"SECRET": "hello"}
+	recipients := map[string]string{"https://github.com/alice": pub1}
+	ef, err := encfile.EncryptSecrets(secrets, recipients)
+	require.NoError(t, err)
+	require.NoError(t, encfile.Save(".env.enc", ef))
+
+	// Add a deploy key with --name (no --key, should generate)
+	err = usersAddCmd(nil, "production-deploy", "")
+	require.NoError(t, err)
+
+	// Verify the recipient was added with shh-user:// prefix
+	loaded, err := encfile.Load(".env.enc")
+	require.NoError(t, err)
+	assert.Len(t, loaded.Recipients, 2)
+	_, hasDeploy := loaded.Recipients["shh-user://production-deploy"]
+	assert.True(t, hasDeploy, "should have shh-user://production-deploy recipient")
+
+	// Verify original user can still decrypt
+	dec, err := encfile.DecryptSecrets(loaded, priv1)
+	require.NoError(t, err)
+	assert.Equal(t, "hello", dec["SECRET"])
+}
+
+func TestUsersAddWithNameAndKey(t *testing.T) {
+	useTempDir(t)
+
+	priv1, pub1 := generateTestKey(t)
+	_, pub2 := generateTestKey(t)
+	setTestAgeKey(t, priv1)
+
+	secrets := map[string]string{"SECRET": "hello"}
+	recipients := map[string]string{"https://github.com/alice": pub1}
+	ef, err := encfile.EncryptSecrets(secrets, recipients)
+	require.NoError(t, err)
+	require.NoError(t, encfile.Save(".env.enc", ef))
+
+	// Add with --name and --key
+	err = usersAddCmd(nil, "staging-deploy", pub2)
+	require.NoError(t, err)
+
+	loaded, err := encfile.Load(".env.enc")
+	require.NoError(t, err)
+	assert.Len(t, loaded.Recipients, 2)
+	assert.Equal(t, pub2, loaded.Recipients["shh-user://staging-deploy"])
+}
+
+func TestUsersAddWithNameRequiresName(t *testing.T) {
+	// No positional arg, no --name → error
+	err := usersAddCmd(nil, "", "")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "--name")
+}
+
+func TestUsersAddWithNameDuplicate(t *testing.T) {
+	useTempDir(t)
+
+	priv1, pub1 := generateTestKey(t)
+	setTestAgeKey(t, priv1)
+
+	secrets := map[string]string{"SECRET": "hello"}
+	recipients := map[string]string{
+		"https://github.com/alice":      pub1,
+		"shh-user://production-deploy": pub1,
+	}
+	ef, err := encfile.EncryptSecrets(secrets, recipients)
+	require.NoError(t, err)
+	require.NoError(t, encfile.Save(".env.enc", ef))
+
+	// Adding the same name again should fail
+	err = usersAddCmd(nil, "production-deploy", "")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "already in use")
+}
+
+func TestUsersRemoveByDeployDisplayName(t *testing.T) {
+	useTempDir(t)
+
+	priv1, pub1 := generateTestKey(t)
+	_, pub2 := generateTestKey(t)
+	setTestAgeKey(t, priv1)
+
+	secrets := map[string]string{"SECRET": "hello"}
+	recipients := map[string]string{
+		"https://github.com/alice":     pub1,
+		"shh-user://production-deploy": pub2,
+	}
+	ef, err := encfile.EncryptSecrets(secrets, recipients)
+	require.NoError(t, err)
+	require.NoError(t, encfile.Save(".env.enc", ef))
+
+	// Remove by display name (without shh-user:// prefix)
+	err = usersRemoveCmd([]string{"production-deploy"})
+	require.NoError(t, err)
+
+	loaded, err := encfile.Load(".env.enc")
+	require.NoError(t, err)
+	assert.Len(t, loaded.Recipients, 1)
+	_, hasAlice := loaded.Recipients["https://github.com/alice"]
+	assert.True(t, hasAlice)
 }

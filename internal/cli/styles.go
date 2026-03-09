@@ -21,5 +21,8 @@ func RecipientDisplayName(name string) string {
 	if strings.HasPrefix(name, "https://github.com/") {
 		return strings.TrimPrefix(name, "https://github.com/")
 	}
+	if strings.HasPrefix(name, "shh-user://") {
+		return strings.TrimPrefix(name, "shh-user://")
+	}
 	return name
 }
