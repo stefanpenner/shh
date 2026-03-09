@@ -204,8 +204,9 @@ func newRootCmd() *cobra.Command {
 
 	// shell command
 	rootCmd.AddCommand(&cobra.Command{
-		Use:   "shell [file]",
-		Short: "Start a subshell with secrets loaded",
+		Use:     "shell [file]",
+		Aliases: []string{"sh"},
+		Short:   "Start a subshell with secrets loaded",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmdShell(fileArg(args))
