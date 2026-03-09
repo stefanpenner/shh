@@ -168,7 +168,7 @@ func newRootCmd() *cobra.Command {
 			env, _ := cmd.Flags().GetString("env")
 			quiet, _ := cmd.Flags().GetBool("quiet")
 			return cmdEnv(resolveFile(env, args), os.Stderr, func() bool {
-				return term.IsTerminal(int(os.Stdout.Fd()))
+				return term.IsTerminal(int(os.Stdout.Fd())) // #nosec G115 -- file descriptors are small non-negative ints; int is pointer-sized on all Go-supported platforms
 			}, quiet)
 		},
 	}
@@ -461,7 +461,7 @@ func cmdWhoami() error {
 
 	// Check which SSH key this corresponds to
 	for _, sshPath := range findSSHEd25519Keys() {
-		data, err := os.ReadFile(sshPath)
+		data, err := os.ReadFile(sshPath) // #nosec G304 -- sshPath is returned by findSSHEd25519Keys, which only produces paths under ~/.ssh
 		if err != nil {
 			continue
 		}
@@ -694,7 +694,7 @@ func tryAutoResolve(path string) (*EncryptedFile, error) {
 	base := filepath.Base(path)
 
 	gitCmd := func(args ...string) *exec.Cmd {
-		cmd := exec.Command("git", args...)
+		cmd := exec.Command("git", args...) // #nosec G204 -- args are program-controlled strings and a filepath.Base-cleaned filename; no user shell expansion
 		cmd.Dir = dir
 		return cmd
 	}
@@ -1063,7 +1063,7 @@ func defaultRecipients() (map[string]string, error) {
 // or by decrypting the encrypted file.
 func loadSecrets(encFile string) (map[string]string, error) {
 	if plainFile := os.Getenv("SHH_PLAINTEXT"); plainFile != "" {
-		data, err := os.ReadFile(plainFile)
+		data, err := os.ReadFile(plainFile) // #nosec G703 G304 -- SHH_PLAINTEXT is an intentional developer/CI escape hatch; the user controls their own environment
 		if err != nil {
 			return nil, errors.Wrapf(err, "read plaintext file %s", plainFile)
 		}
@@ -1144,7 +1144,7 @@ func findSSHEd25519Keys() []string {
 			continue
 		}
 		path := filepath.Join(sshDir, e.Name())
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) // #nosec G703 G304 -- path is sshDir+ReadDir entry name; os.ReadDir returns bare filenames so no traversal is possible
 		if err != nil {
 			continue
 		}
@@ -1190,22 +1190,20 @@ func runLogin(cmd *cobra.Command, args []string) error {
 
 	// Find local SSH keys and try to match against recipients
 	for _, sshPath := range findSSHEd25519Keys() {
-		data, _ := os.ReadFile(sshPath)
+		data, _ := os.ReadFile(sshPath) // #nosec G304 -- sshPath is returned by findSSHEd25519Keys, which only produces paths under ~/.ssh
 		privPtr, pubPtr, err := sshKeyToAge(data, sshPath)
 		if err != nil {
 			continue
 		}
-		if recipients != nil {
-			for _, rk := range recipients {
-				if rk == *pubPtr {
-					if err := storeKey(*privPtr); err != nil {
-						return errors.Wrap(err, "keyring store")
-					}
-					fmt.Printf("Matched SSH key %s\n", hintStyle.Render(sshPath))
-					fmt.Println(successStyle.Render("Key stored in OS keyring."))
-					fmt.Printf("  %s\n", keyStyle.Render(*pubPtr))
-					return nil
+		for _, rk := range recipients {
+			if rk == *pubPtr {
+				if err := storeKey(*privPtr); err != nil {
+					return errors.Wrap(err, "keyring store")
 				}
+				fmt.Printf("Matched SSH key %s\n", hintStyle.Render(sshPath))
+				fmt.Println(successStyle.Render("Key stored in OS keyring."))
+				fmt.Printf("  %s\n", keyStyle.Render(*pubPtr))
+				return nil
 			}
 		}
 	}
@@ -1369,7 +1367,7 @@ func cmdEdit(file string) error {
 	defer os.Remove(tmpPath)
 
 	if err := tmpFile.Chmod(0600); err != nil {
-		tmpFile.Close()
+		tmpFile.Close() // #nosec G104 -- cleanup in error path; primary error already captured
 		return errors.Wrap(err, "chmod temp file")
 	}
 
@@ -2075,7 +2073,7 @@ func cmdTemplate(templatePath string, encFile string) error {
 	if templatePath == "-" {
 		tmplBytes, err = io.ReadAll(os.Stdin)
 	} else {
-		tmplBytes, err = os.ReadFile(templatePath)
+		tmplBytes, err = os.ReadFile(templatePath) // #nosec G304 -- templatePath is a CLI argument; the user intentionally specifies which template file to render
 	}
 	if err != nil {
 		return errors.Wrap(err, "read template")
