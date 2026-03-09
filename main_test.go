@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/hmac"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -805,6 +806,45 @@ func TestIntegration_UsersRemoveRotatesDataKey(t *testing.T) {
 	reloaded, _ := loadEncryptedFile(".env.enc")
 	_, err = decryptSecrets(reloaded)
 	assert.Error(t, err)
+}
+
+func TestFindEncFile_WalksUp(t *testing.T) {
+	dir := t.TempDir()
+	// Resolve symlinks (macOS /var -> /private/var) to match os.Getwd()
+	dir, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+
+	// Create .env.enc in root
+	ef := &EncryptedFile{
+		Version:    1,
+		MAC:        "test",
+		DataKey:    "test",
+		Recipients: map[string]string{},
+		Secrets:    map[string]string{},
+	}
+	require.NoError(t, os.Chdir(dir))
+	require.NoError(t, saveEncryptedFile(".env.enc", ef))
+
+	// Create nested dirs and cd into them
+	nested := filepath.Join(dir, "a", "b", "c")
+	require.NoError(t, os.MkdirAll(nested, 0755))
+	require.NoError(t, os.Chdir(nested))
+
+	found := findEncFile()
+	assert.Equal(t, filepath.Join(dir, ".env.enc"), found)
+}
+
+func TestFindEncFile_FallsBack(t *testing.T) {
+	dir := t.TempDir()
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+
+	// No .env.enc anywhere — should fall back to default
+	require.NoError(t, os.Chdir(dir))
+	found := findEncFile()
+	assert.Equal(t, defaultEncryptedFile, found)
 }
 
 func TestPublicKeyFrom(t *testing.T) {

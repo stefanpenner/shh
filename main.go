@@ -180,7 +180,7 @@ func newRootCmd() *cobra.Command {
 		Short: "Add or update a secret",
 		Args:  cobra.RangeArgs(2, 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			file := defaultEncryptedFile
+			file := findEncFile()
 			if len(args) > 2 {
 				file = args[2]
 			}
@@ -194,7 +194,7 @@ func newRootCmd() *cobra.Command {
 		Short: "Remove a secret",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			file := defaultEncryptedFile
+			file := findEncFile()
 			if len(args) > 1 {
 				file = args[1]
 			}
@@ -262,11 +262,33 @@ func main() {
 
 // --- Helpers ---
 
+// findEncFile walks up from the current directory looking for .env.enc.
+// Returns the path if found, otherwise falls back to defaultEncryptedFile
+// in the current directory (so that create operations still work).
+func findEncFile() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return defaultEncryptedFile
+	}
+	for {
+		candidate := filepath.Join(dir, defaultEncryptedFile)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return defaultEncryptedFile
+}
+
 func fileArg(args []string) string {
 	if len(args) > 0 {
 		return args[0]
 	}
-	return defaultEncryptedFile
+	return findEncFile()
 }
 
 func currentUsername() string {
@@ -328,7 +350,7 @@ func cmdWhoami() error {
 
 	// Check if we're in a project's recipients list
 	ghShown := false
-	if ef, err := loadEncryptedFile(defaultEncryptedFile); err == nil {
+	if ef, err := loadEncryptedFile(findEncFile()); err == nil {
 		for name, pk := range ef.Recipients {
 			if pk == pubKey {
 				displayName, ghURL := parseRecipientName(name)
@@ -843,7 +865,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 
 	// Load recipients from .env.enc if it exists
 	var recipients map[string]string
-	if ef, err := loadEncryptedFile(defaultEncryptedFile); err == nil {
+	if ef, err := loadEncryptedFile(findEncFile()); err == nil {
 		recipients = ef.Recipients
 	}
 
@@ -1260,7 +1282,8 @@ func cmdShell(file string) error {
 // --- Key Management ---
 
 func usersListCmd() error {
-	ef, err := loadEncryptedFile(defaultEncryptedFile)
+	file := findEncFile()
+	ef, err := loadEncryptedFile(file)
 	if err != nil {
 		return errors.Newf("no %s found (run 'shh set' first)", defaultEncryptedFile)
 	}
@@ -1355,7 +1378,7 @@ func usersAddCmd(args []string) error {
 		name = args[1]
 	}
 
-	file := defaultEncryptedFile
+	file := findEncFile()
 	var ef *EncryptedFile
 
 	if _, err := os.Stat(file); err == nil {
@@ -1411,7 +1434,8 @@ func usersAddCmd(args []string) error {
 func usersRemoveCmd(args []string) error {
 	target := args[0]
 
-	ef, err := loadEncryptedFile(defaultEncryptedFile)
+	file := findEncFile()
+	ef, err := loadEncryptedFile(file)
 	if err != nil {
 		return errors.Newf("no %s found", defaultEncryptedFile)
 	}
@@ -1455,7 +1479,7 @@ func usersRemoveCmd(args []string) error {
 		return err
 	}
 
-	if err := saveEncryptedFile(defaultEncryptedFile, newEf); err != nil {
+	if err := saveEncryptedFile(file, newEf); err != nil {
 		return err
 	}
 

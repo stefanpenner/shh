@@ -1,8 +1,8 @@
 # shh
 
-Encrypted secrets for your team. One binary, no dependencies.
+Commit your secrets. Yes, really.
 
-Your secrets live in `.env.enc` — encrypted, safe to commit, and shareable with teammates. Private keys stay in your OS keyring.
+Encrypted secrets live in your repo, safe to push, easy to share. One binary, no dependencies. Private keys stay in your OS keyring.
 
 ## Install
 
@@ -49,7 +49,7 @@ shh shell staging.env.enc
 Already have a `.env` file? Encrypt it:
 
 ```bash
-shh encrypt .env                      # creates .env.enc, then delete .env
+shh encrypt .env                      # creates .env.enc (then delete .env)
 ```
 
 ## Team Workflow
@@ -92,6 +92,7 @@ shh whoami                            # show your key and identity
 
 - **One file** — `.env.enc` is a TOML file containing encrypted secrets, recipients, and the wrapped data key
 - **Private keys** stay in your OS keyring (macOS Keychain, GNOME/KDE Secret Service, Windows Credential Manager). Set `SHH_AGE_KEY` to override for CI/Docker
+- **GitHub integration** — `shh users add alice` fetches their public SSH key from GitHub and converts it to an age key. `shh login` auto-detects your identity via the `gh` CLI
 - **Encryption** uses [age](https://age-encryption.org) for key wrapping and AES-256-GCM for per-value encryption
 - **Integrity** is verified with HMAC-SHA256 on every decrypt
 - **`shh shell`** decrypts secrets into memory only — they exist as env vars in the subshell and are gone when you exit
