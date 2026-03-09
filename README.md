@@ -145,9 +145,35 @@ For proactive conflict prevention, configure the built-in merge driver:
 
 Even without the merge driver, conflicts are resolved automatically on the next `shh` command.
 
+## File Format
+
+`.env.enc` is a TOML file:
+
+```toml
+version = 2
+mac = "hmac-sha256-hex"
+
+[recipients]
+"https://github.com/alice" = "age1..."
+"https://github.com/bob" = "age1..."
+
+[wrapped_keys]
+"https://github.com/alice" = "base64-data-key-wrapped-to-alice"
+"https://github.com/bob" = "base64-data-key-wrapped-to-bob"
+
+[secrets]
+DATABASE_URL = "base64-aes-256-gcm-ciphertext"
+API_KEY = "base64-aes-256-gcm-ciphertext"
+```
+
+- **`recipients`** — maps GitHub identities to age public keys
+- **`wrapped_keys`** — the same AES-256 data key, individually wrapped (age-encrypted) to each recipient. One entry per recipient means adding teammates on separate branches won't conflict
+- **`secrets`** — each value encrypted with AES-256-GCM using the data key, with the key name as authenticated data
+- **`mac`** — HMAC-SHA256 over all fields, verified on every decrypt
+
 ## How It Works
 
-- **One file** — `.env.enc` is a TOML file containing encrypted secrets, per-recipient wrapped keys, and an HMAC
+- **One file** — `.env.enc` is committed to your repo alongside your code
 - **Private keys** stay in your OS keyring (macOS Keychain, GNOME/KDE Secret Service, Windows Credential Manager). Set `SHH_AGE_KEY` to override for CI/Docker. Set `SHH_PLAINTEXT` to point at a plain `.env` file to skip decryption entirely (useful for CI/testing)
 - **GitHub integration** — `shh users add alice` fetches their public SSH key from GitHub and converts it to an age key. `shh login` auto-detects your identity via the `gh` CLI
 - **Encryption** uses [age](https://age-encryption.org) for key wrapping and AES-256-GCM for per-value encryption. Each recipient gets their own wrapped copy of the data key
