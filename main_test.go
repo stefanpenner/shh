@@ -1285,7 +1285,7 @@ func TestAutoResolve_OnLoad(t *testing.T) {
 	recipients := map[string]string{"testuser": pub}
 
 	// Init repo and create base commit
-	gitRun(t, dir, "init")
+	gitRun(t, dir, "init", "-b", "main")
 	os.Chdir(dir)
 
 	baseEf, err := encryptSecrets(map[string]string{"BASE": "value"}, recipients)
@@ -1350,7 +1350,7 @@ func TestAutoResolve_Conflict_Fails(t *testing.T) {
 	setTestAgeKey(t, priv)
 	recipients := map[string]string{"testuser": pub}
 
-	gitRun(t, dir, "init")
+	gitRun(t, dir, "init", "-b", "main")
 	os.Chdir(dir)
 
 	baseEf, err := encryptSecrets(map[string]string{"SECRET": "original"}, recipients)
