@@ -78,7 +78,11 @@ func newRootCmd() *cobra.Command {
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, _ := cmd.Flags().GetString("env")
-			return cmdList(envutil.ResolveFile(env, args))
+			file, err := envutil.ResolveFileE(env, args)
+			if err != nil {
+				return err
+			}
+			return cmdList(file)
 		},
 	}
 	listCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
@@ -92,7 +96,11 @@ func newRootCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, _ := cmd.Flags().GetString("env")
 			quiet, _ := cmd.Flags().GetBool("quiet")
-			return cmdEnv(envutil.ResolveFile(env, args), os.Stderr, func() bool {
+			file, err := envutil.ResolveFileE(env, args)
+			if err != nil {
+				return err
+			}
+			return cmdEnv(file, os.Stderr, func() bool {
 				return term.IsTerminal(int(os.Stdout.Fd())) // #nosec G115 -- file descriptors always fit in int
 			}, quiet)
 		},
@@ -108,7 +116,11 @@ func newRootCmd() *cobra.Command {
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, _ := cmd.Flags().GetString("env")
-			return cmdEdit(envutil.ResolveFile(env, args))
+			file, err := envutil.ResolveFileE(env, args)
+			if err != nil {
+				return err
+			}
+			return cmdEdit(file)
 		},
 	}
 	editCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
@@ -121,7 +133,10 @@ func newRootCmd() *cobra.Command {
 		Args:  cobra.RangeArgs(2, 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, _ := cmd.Flags().GetString("env")
-			file := envutil.ResolveFile(env, nil)
+			file, err := envutil.ResolveFileE(env, nil)
+			if err != nil {
+				return err
+			}
 			if len(args) > 2 {
 				file = args[2]
 			}
@@ -139,7 +154,10 @@ func newRootCmd() *cobra.Command {
 		Args:    cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, _ := cmd.Flags().GetString("env")
-			file := envutil.ResolveFile(env, nil)
+			file, err := envutil.ResolveFileE(env, nil)
+			if err != nil {
+				return err
+			}
 			if len(args) > 1 {
 				file = args[1]
 			}
@@ -157,7 +175,11 @@ func newRootCmd() *cobra.Command {
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, _ := cmd.Flags().GetString("env")
-			return cmdShell(envutil.ResolveFile(env, args))
+			file, err := envutil.ResolveFileE(env, args)
+			if err != nil {
+				return err
+			}
+			return cmdShell(file)
 		},
 	}
 	shellCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
