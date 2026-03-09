@@ -33,19 +33,31 @@ ssh-to-age, cobra) and flag any that apply.
 
 Be adversarial — think like an attacker targeting this tool.
 
+## Static analysis triage
+
+If static analysis results are appended below, triage every finding:
+- **Real issues**: fix the code
+- **False positives**: add a `// nolint:rulename` or `// #nosec Gxxx`
+  annotation with a brief justification comment on the same line
+  explaining why it is safe
+
+The goal is a clean scan — every finding should be either fixed or
+annotated so the scan exits 0.
+
 ## Fix and open a PR
 
-After completing the audit, if you find any Medium or higher severity
-issues that you can confidently fix:
+After completing the audit, combine your own findings with the static
+analysis fixes into a single PR:
 
 1. Create a new branch named `security/fix-<short-description>`
 2. Apply the fixes, keeping changes minimal and focused
 3. Run `go vet ./...` and `go test -race ./...` to verify nothing breaks
-4. Commit with a clear message explaining the security issue and fix
-5. Push the branch and open a pull request with:
+4. Run `gosec ./...` and `staticcheck ./...` to confirm a clean scan
+5. Commit with a clear message explaining the security issues and fixes
+6. Push the branch and open a pull request with:
    - Title prefixed with `security:`
    - Body containing the finding details (severity, description, attack
-     scenario) and explanation of the fix
+     scenario) and explanation of each fix
    - Label: `security`
 
 If there are no fixable findings, skip the PR and just report the audit
