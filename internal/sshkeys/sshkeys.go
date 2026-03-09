@@ -58,7 +58,7 @@ func FindEd25519Keys() []string {
 			continue
 		}
 		path := filepath.Join(sshDir, e.Name())
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) // #nosec G304 G703 -- path is filepath.Join of a fixed dir and a ReadDir entry name
 		if err != nil {
 			continue
 		}
