@@ -2,7 +2,7 @@
 
 Commit your secrets. Yes, really.
 
-Encrypted secrets live in your repo, safe to push, easy to share. One binary, no dependencies. Private keys stay in your OS keyring.
+Encrypted secrets live in your repo, safe to push, easy to share. Add teammates by GitHub username — `shh users add alice` fetches their SSH key automatically. No GitHub? Pass an age key directly. One binary, no dependencies. Private keys stay in your OS keyring.
 
 ## Install
 
