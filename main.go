@@ -59,7 +59,7 @@ var (
 	httpClient = &http.Client{
 		Timeout: 30 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if req.URL.Host != "github.com" {
+			if req.URL.Scheme != "https" || req.URL.Host != "github.com" {
 				return errors.Newf("refusing redirect to %s", req.URL.Host)
 			}
 			if len(via) >= 3 {
@@ -624,6 +624,15 @@ func reWrapDataKey(ef *EncryptedFile, newRecipients map[string]string) error {
 	return nil
 }
 
+// shellQuote returns a POSIX single-quoted string safe to use in shell output.
+// Single-quoting prevents all shell expansion (variables, backticks, globs).
+// The only character that must be handled specially is the single-quote itself,
+// which is escaped by ending the single-quoted string, emitting a
+// backslash-escaped single-quote, then resuming single-quoting.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // --- Plaintext helpers ---
 
 func parsePlaintext(content string) map[string]string {
@@ -780,7 +789,7 @@ func cmdEnv(file string) error {
 		return err
 	}
 	for _, k := range sortedKeys(secrets) {
-		fmt.Printf("export %s=%q\n", k, secrets[k])
+		fmt.Printf("export %s=%s\n", k, shellQuote(secrets[k]))
 	}
 	return nil
 }
@@ -865,6 +874,12 @@ func cmdEdit(file string) error {
 	}
 
 	newSecrets := parsePlaintext(string(edited))
+
+	for k := range newSecrets {
+		if !envVarKeyPattern.MatchString(k) {
+			return errors.Newf("invalid key name %q (must match [A-Za-z_][A-Za-z0-9_]*); re-open with 'shh edit' to fix", k)
+		}
+	}
 
 	ef, err := encryptSecrets(newSecrets, recipients)
 	if err != nil {
