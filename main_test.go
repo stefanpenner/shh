@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"crypto/hmac"
+	"crypto/rand"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +14,7 @@ import (
 	"filippo.io/age"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 )
 
 // helper: chdir to a temp dir, restore on cleanup
@@ -1137,4 +1141,145 @@ func FuzzValidateTOMLValue(f *testing.F) {
 			assert.NoError(t, err)
 		}
 	})
+}
+
+// --- SSH key passphrase test helpers ---
+
+func generatePassphraseProtectedTestKey(t *testing.T, passphrase string) []byte {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	block, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "", []byte(passphrase))
+	require.NoError(t, err)
+	return pem.EncodeToMemory(block)
+}
+
+func generateUnprotectedTestKey(t *testing.T) []byte {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	block, err := ssh.MarshalPrivateKey(priv, "")
+	require.NoError(t, err)
+	return pem.EncodeToMemory(block)
+}
+
+func setTestPassphraseReader(t *testing.T, passphrase string) {
+	t.Helper()
+	orig := readPassphrase
+	readPassphrase = func(keyPath string) ([]byte, error) {
+		return []byte(passphrase), nil
+	}
+	t.Cleanup(func() { readPassphrase = orig })
+}
+
+// --- SSH key passphrase tests ---
+
+func TestSshKeyToAge_UnprotectedKey(t *testing.T) {
+	keyData := generateUnprotectedTestKey(t)
+	priv, pub, err := sshKeyToAge(keyData, "/tmp/test_key")
+	require.NoError(t, err)
+	assert.NotNil(t, priv)
+	assert.NotNil(t, pub)
+	assert.True(t, strings.HasPrefix(*pub, "age1"))
+}
+
+func TestSshKeyToAge_PassphraseProtected(t *testing.T) {
+	passphrase := "test-passphrase-123"
+	keyData := generatePassphraseProtectedTestKey(t, passphrase)
+	setTestPassphraseReader(t, passphrase)
+
+	priv, pub, err := sshKeyToAge(keyData, "/tmp/test_key")
+	require.NoError(t, err)
+	assert.NotNil(t, priv)
+	assert.NotNil(t, pub)
+	assert.True(t, strings.HasPrefix(*pub, "age1"))
+}
+
+func TestSshKeyToAge_WrongPassphrase(t *testing.T) {
+	keyData := generatePassphraseProtectedTestKey(t, "correct-passphrase")
+	setTestPassphraseReader(t, "wrong-passphrase")
+
+	_, _, err := sshKeyToAge(keyData, "/tmp/test_key")
+	assert.Error(t, err)
+}
+
+func TestSshKeyToAge_PromptsWithCorrectPath(t *testing.T) {
+	passphrase := "test-passphrase"
+	keyData := generatePassphraseProtectedTestKey(t, passphrase)
+
+	var capturedPath string
+	orig := readPassphrase
+	readPassphrase = func(keyPath string) ([]byte, error) {
+		capturedPath = keyPath
+		return []byte(passphrase), nil
+	}
+	t.Cleanup(func() { readPassphrase = orig })
+
+	expectedPath := "/home/user/.ssh/id_ed25519"
+	_, _, err := sshKeyToAge(keyData, expectedPath)
+	require.NoError(t, err)
+	assert.Equal(t, expectedPath, capturedPath)
+}
+
+func TestFindSSHEd25519Keys_IncludesPassphraseProtected(t *testing.T) {
+	// Set up a temp HOME with .ssh directory
+	tmpHome := t.TempDir()
+	sshDir := filepath.Join(tmpHome, ".ssh")
+	require.NoError(t, os.MkdirAll(sshDir, 0700))
+
+	// Create an unprotected ed25519 key
+	unprotectedData := generateUnprotectedTestKey(t)
+	require.NoError(t, os.WriteFile(filepath.Join(sshDir, "id_ed25519"), unprotectedData, 0600))
+
+	// Create a passphrase-protected ed25519 key
+	protectedData := generatePassphraseProtectedTestKey(t, "my-passphrase")
+	require.NoError(t, os.WriteFile(filepath.Join(sshDir, "id_ed25519_protected"), protectedData, 0600))
+
+	// Override HOME
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpHome)
+	t.Cleanup(func() { os.Setenv("HOME", origHome) })
+
+	keys := findSSHEd25519Keys()
+	assert.Len(t, keys, 2, "should find both protected and unprotected keys")
+
+	// Both paths should be present
+	var foundUnprotected, foundProtected bool
+	for _, k := range keys {
+		if strings.HasSuffix(k, "id_ed25519") {
+			foundUnprotected = true
+		}
+		if strings.HasSuffix(k, "id_ed25519_protected") {
+			foundProtected = true
+		}
+	}
+	assert.True(t, foundUnprotected, "should find unprotected key")
+	assert.True(t, foundProtected, "should find passphrase-protected key")
+}
+
+func TestSshKeyToAge_ProtectedAndUnprotectedProduceSameResult(t *testing.T) {
+	// Generate a key, save it both protected and unprotected, verify same age key
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	passphrase := "test-pass"
+
+	unprotectedBlock, err := ssh.MarshalPrivateKey(priv, "")
+	require.NoError(t, err)
+	unprotectedPEM := pem.EncodeToMemory(unprotectedBlock)
+
+	protectedBlock, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "", []byte(passphrase))
+	require.NoError(t, err)
+	protectedPEM := pem.EncodeToMemory(protectedBlock)
+
+	// Unprotected conversion
+	_, pubUnprotected, err := sshKeyToAge(unprotectedPEM, "/tmp/key")
+	require.NoError(t, err)
+
+	// Protected conversion
+	setTestPassphraseReader(t, passphrase)
+	_, pubProtected, err := sshKeyToAge(protectedPEM, "/tmp/key")
+	require.NoError(t, err)
+
+	assert.Equal(t, *pubUnprotected, *pubProtected, "same key should produce same age public key")
 }

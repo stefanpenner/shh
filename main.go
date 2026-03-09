@@ -31,6 +31,8 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/spf13/cobra"
 	"github.com/zalando/go-keyring"
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/term"
 )
 
 const (
@@ -373,7 +375,7 @@ func cmdWhoami() error {
 		if err != nil {
 			continue
 		}
-		_, pubPtr, err := sshtoa.SSHPrivateKeyToAge(data, nil)
+		_, pubPtr, err := sshKeyToAge(data, sshPath)
 		if err != nil {
 			continue
 		}
@@ -826,6 +828,37 @@ func ghUsername() string {
 	return ""
 }
 
+// readPassphrase prompts the user for an SSH key passphrase.
+// It is a package-level var so tests can replace it.
+var readPassphrase = func(keyPath string) ([]byte, error) {
+	fmt.Fprintf(os.Stderr, "Enter passphrase for %s: ", keyPath)
+	pass, err := term.ReadPassword(int(syscall.Stdin))
+	fmt.Fprintln(os.Stderr)
+	return pass, err
+}
+
+// sshKeyToAge converts an SSH private key to age identity strings,
+// prompting for a passphrase if needed.
+func sshKeyToAge(data []byte, keyPath string) (*string, *string, error) {
+	priv, pub, err := sshtoa.SSHPrivateKeyToAge(data, nil)
+	if err == nil {
+		return priv, pub, nil
+	}
+
+	// Check if passphrase is needed
+	var missingErr *ssh.PassphraseMissingError
+	if !errors.As(err, &missingErr) {
+		return nil, nil, err
+	}
+
+	passphrase, err := readPassphrase(keyPath)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "read passphrase")
+	}
+
+	return sshtoa.SSHPrivateKeyToAge(data, passphrase)
+}
+
 // findSSHEd25519Keys returns paths to all ed25519 private keys in ~/.ssh/
 func findSSHEd25519Keys() []string {
 	sshDir := filepath.Join(os.Getenv("HOME"), ".ssh")
@@ -843,12 +876,20 @@ func findSSHEd25519Keys() []string {
 		if err != nil {
 			continue
 		}
-		// Quick check for ed25519 private key marker
-		if bytes.Contains(data, []byte("OPENSSH PRIVATE KEY")) {
-			// Try to convert — ssh-to-age will reject non-ed25519
-			if _, _, err := sshtoa.SSHPrivateKeyToAge(data, nil); err == nil {
-				keys = append(keys, path)
-			}
+		// Quick check for SSH private key marker
+		if !bytes.Contains(data, []byte("OPENSSH PRIVATE KEY")) {
+			continue
+		}
+		// Try to convert — ssh-to-age will reject non-ed25519
+		if _, _, err := sshtoa.SSHPrivateKeyToAge(data, nil); err == nil {
+			keys = append(keys, path)
+			continue
+		}
+		// If passphrase-protected, include it — we'll confirm type at conversion time
+		_, err = ssh.ParseRawPrivateKey(data)
+		var missingErr *ssh.PassphraseMissingError
+		if errors.As(err, &missingErr) {
+			keys = append(keys, path)
 		}
 	}
 	return keys
@@ -878,7 +919,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	// Find local SSH keys and try to match against recipients
 	for _, sshPath := range findSSHEd25519Keys() {
 		data, _ := os.ReadFile(sshPath)
-		privPtr, pubPtr, err := sshtoa.SSHPrivateKeyToAge(data, nil)
+		privPtr, pubPtr, err := sshKeyToAge(data, sshPath)
 		if err != nil {
 			continue
 		}
@@ -932,7 +973,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return errors.Wrap(err, "read SSH key")
 		}
-		privKeyPtr, pubKeyPtr, err := sshtoa.SSHPrivateKeyToAge(sshKeyData, nil)
+		privKeyPtr, pubKeyPtr, err := sshKeyToAge(sshKeyData, sshKey)
 		if err != nil {
 			return errors.Wrap(err, "ssh-to-age")
 		}
