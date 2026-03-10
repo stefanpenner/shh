@@ -2,8 +2,11 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
+	"github.com/cockroachdb/errors"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
@@ -128,8 +131,8 @@ func newRootCmd() *cobra.Command {
 
 	// set command
 	setCmd := &cobra.Command{
-		Use:   "set <KEY> <VALUE> [file]",
-		Short: "Add or update a secret",
+		Use:   "set <KEY> <VALUE|--> [file]",
+		Short: "Add or update a secret (use - as VALUE to read from stdin)",
 		Args:  cobra.RangeArgs(2, 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, _ := cmd.Flags().GetString("env")
@@ -140,7 +143,16 @@ func newRootCmd() *cobra.Command {
 			if len(args) > 2 {
 				file = args[2]
 			}
-			return cmdSet(file, args[0], args[1])
+			value := args[1]
+			if value == "-" {
+				// Read value from stdin to avoid secret exposure in process args / ps output.
+				data, err := io.ReadAll(os.Stdin)
+				if err != nil {
+					return errors.Wrap(err, "read value from stdin")
+				}
+				value = strings.TrimRight(string(data), "\n")
+			}
+			return cmdSet(file, args[0], value)
 		},
 	}
 	setCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
