@@ -47,7 +47,11 @@ func ToAge(data []byte, keyPath string) (*string, *string, error) {
 
 // FindEd25519Keys returns paths to all ed25519 private keys in ~/.ssh/
 func FindEd25519Keys() []string {
-	sshDir := filepath.Join(os.Getenv("HOME"), ".ssh")
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	sshDir := filepath.Join(homeDir, ".ssh")
 	entries, err := os.ReadDir(sshDir)
 	if err != nil {
 		return nil

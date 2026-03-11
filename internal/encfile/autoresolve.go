@@ -27,7 +27,7 @@ func TryAutoResolve(path string, privateKey string) (*EncryptedFile, error) {
 		return cmd
 	}
 
-	out, err := gitCmd("ls-files", "-u", base).Output()
+	out, err := gitCmd("ls-files", "-u", "--", base).Output()
 	if err != nil || len(out) == 0 {
 		return nil, errors.New("not a merge conflict")
 	}
@@ -87,7 +87,7 @@ func TryAutoResolve(path string, privateKey string) (*EncryptedFile, error) {
 		return nil, errors.Wrap(err, "save resolved file")
 	}
 
-	if err := gitCmd("add", base).Run(); err != nil {
+	if err := gitCmd("add", "--", base).Run(); err != nil {
 		return nil, errors.Wrap(err, "git add")
 	}
 
