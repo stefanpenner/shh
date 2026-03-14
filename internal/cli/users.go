@@ -163,19 +163,40 @@ func usersRemoveCmd(args []string) error {
 	}
 
 	// Find and remove the key
-	var removedName string
+	// Collect all candidates: first try exact match (pk or full name), then display name.
+	var exactMatches []string
+	var displayMatches []string
+	for name, pk := range ef.Recipients {
+		if pk == target || name == target {
+			exactMatches = append(exactMatches, name)
+		} else if RecipientDisplayName(name) == target {
+			displayMatches = append(displayMatches, name)
+		}
+	}
+
+	// Prefer exact matches; fall back to display-name matches only when unambiguous.
+	var candidates []string
+	switch {
+	case len(exactMatches) > 0:
+		candidates = exactMatches
+	case len(displayMatches) == 1:
+		candidates = displayMatches
+	case len(displayMatches) > 1:
+		return errors.Newf("ambiguous match for %q: multiple recipients share that display name; use the full name (e.g. https://github.com/user) or public key instead", target)
+	}
+
+	if len(candidates) == 0 {
+		return errors.Newf("key not found: %s", target)
+	}
+
+	removedName := candidates[0]
 	newRecipients := make(map[string]string)
 	for name, pk := range ef.Recipients {
-		if pk == target || name == target || RecipientDisplayName(name) == target {
-			removedName = name
-		} else {
+		if name != removedName {
 			newRecipients[name] = pk
 		}
 	}
 
-	if removedName == "" {
-		return errors.Newf("key not found: %s", target)
-	}
 	if len(newRecipients) == 0 {
 		return errors.New("cannot remove the last key")
 	}
