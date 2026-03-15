@@ -15,13 +15,22 @@ var (
 	envNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 
 	DangerousEnvVars = map[string]bool{
+		// Core identity / path variables
 		"PATH": true, "HOME": true, "SHELL": true, "USER": true, "LOGNAME": true,
+		// Linux dynamic-linker injection
 		"LD_PRELOAD": true, "LD_LIBRARY_PATH": true,
+		// macOS dynamic-linker injection
 		"DYLD_INSERT_LIBRARIES": true, "DYLD_LIBRARY_PATH": true, "DYLD_FRAMEWORK_PATH": true,
 		// Shell startup files: bash sources BASH_ENV on non-interactive invocations;
 		// sh sources ENV. Storing these as secrets and injecting them into `shh shell`
 		// or `shh run` would execute arbitrary code at shell startup.
 		"BASH_ENV": true, "ENV": true,
+		// IFS controls shell word-splitting; overriding it breaks scripts that
+		// rely on default whitespace splitting and can lead to unexpected behaviour.
+		"IFS": true,
+		// PROMPT_COMMAND is executed as a shell command before each prompt;
+		// injecting it allows arbitrary code execution in interactive shells.
+		"PROMPT_COMMAND": true,
 	}
 )
 
