@@ -14,6 +14,11 @@ const keychainService = "shh-age-key"
 
 func GetKey() (string, error) {
 	if key := os.Getenv("SHH_AGE_KEY"); key != "" {
+		// Validate eagerly so callers get a clear error rather than a cryptic
+		// failure deep in the encryption stack.
+		if _, err := crypto.PublicKeyFrom(key); err != nil {
+			return "", errors.New("SHH_AGE_KEY is not a valid age private key")
+		}
 		return key, nil
 	}
 	key, err := gokeyring.Get(keychainService, envutil.CurrentUsername())
