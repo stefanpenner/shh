@@ -44,7 +44,10 @@ func Username() string {
 			parts := strings.Fields(line)
 			for i, p := range parts {
 				if p == "account" && i+1 < len(parts) {
-					return strings.TrimRight(parts[i+1], " ()")
+					candidate := strings.TrimRight(parts[i+1], " ()")
+					if envutil.GithubUserPattern.MatchString(candidate) {
+						return candidate
+					}
 				}
 			}
 		}

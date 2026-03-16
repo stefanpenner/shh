@@ -48,6 +48,9 @@ func usersAddCmd(args []string, deployName, deployKey string) error {
 
 	if deployName != "" {
 		// Deploy key mode: --name provided
+		if err := envutil.ValidateEnvName(deployName); err != nil {
+			return errors.Wrapf(err, "invalid --name")
+		}
 		name = shhUserPrefix + deployName
 		if deployKey != "" {
 			// User provided a key
