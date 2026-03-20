@@ -77,6 +77,17 @@ func TestCmdRun_FiltersShhAgeKey(t *testing.T) {
 	assert.Error(t, err, "SHH_AGE_KEY should not be in child environment")
 }
 
+func TestCmdRun_FiltersShhPlaintext(t *testing.T) {
+	useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+	setupEncryptedFile(t, ".env.enc", map[string]string{"FOO": "bar"}, pubKey)
+
+	t.Setenv("SHH_PLAINTEXT", "/tmp/some-plaintext.env")
+	err := cmdRun(".env.enc", []string{"printenv", "SHH_PLAINTEXT"})
+	assert.Error(t, err, "SHH_PLAINTEXT should not be in child environment")
+}
+
 func TestCmdRun_NoArgs(t *testing.T) {
 	err := cmdRun(".env.enc", nil)
 	assert.Error(t, err)

@@ -23,7 +23,7 @@ func cmdShell(file string) error {
 		return err
 	}
 
-	env := envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY")
+	env := envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY", "SHH_PLAINTEXT")
 	for k, v := range secrets {
 		env = append(env, k+"="+v)
 	}
@@ -70,7 +70,7 @@ func cmdRun(file string, args []string) error {
 		return err
 	}
 
-	env := envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY")
+	env := envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY", "SHH_PLAINTEXT")
 	for k, v := range secrets {
 		env = append(env, k+"="+v)
 	}
