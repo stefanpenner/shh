@@ -13,6 +13,22 @@ import (
 	"github.com/stefanpenner/shh/internal/keyring"
 )
 
+// appendSecrets adds secret key=value pairs to env, skipping any keys in
+// DangerousEnvVars. This is defense-in-depth: the storage layer already
+// rejects dangerous keys, but a file crafted outside of `shh set`/`shh edit`
+// (e.g., via direct TOML manipulation by a rogue recipient, or via git merge)
+// could still contain them.
+func appendSecrets(env []string, secrets map[string]string) []string {
+	for k, v := range secrets {
+		if envutil.DangerousEnvVars[k] {
+			fmt.Fprintf(os.Stderr, "warning: skipping dangerous env var %q from secrets file\n", k)
+			continue
+		}
+		env = append(env, k+"="+v)
+	}
+	return env
+}
+
 func cmdShell(file string) error {
 	privKey, err := keyring.GetKey()
 	if err != nil {
@@ -23,10 +39,7 @@ func cmdShell(file string) error {
 		return err
 	}
 
-	env := envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY", "SHH_PLAINTEXT")
-	for k, v := range secrets {
-		env = append(env, k+"="+v)
-	}
+	env := appendSecrets(envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY", "SHH_PLAINTEXT"), secrets)
 
 	shell := os.Getenv("SHELL")
 	if shell == "" {
@@ -70,10 +83,7 @@ func cmdRun(file string, args []string) error {
 		return err
 	}
 
-	env := envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY", "SHH_PLAINTEXT")
-	for k, v := range secrets {
-		env = append(env, k+"="+v)
-	}
+	env := appendSecrets(envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY", "SHH_PLAINTEXT"), secrets)
 
 	cmd := exec.Command(args[0], args[1:]...) // #nosec G204
 	cmd.Stdin = os.Stdin
