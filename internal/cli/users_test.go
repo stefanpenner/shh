@@ -226,6 +226,24 @@ func TestUsersAddWithNameRequiresName(t *testing.T) {
 	assert.Contains(t, err.Error(), "--name")
 }
 
+func TestUsersAddWithNameRejectsInvalidName(t *testing.T) {
+	// Control characters in --name must be rejected before any file I/O.
+	// Go's %q produces \a, \v etc. which are not valid TOML escape sequences,
+	// which would corrupt the encrypted secrets file.
+	invalidNames := []string{
+		"deploy\x07prod",  // BEL — Go %q → \a, invalid in TOML
+		"deploy\x0bprod",  // VT  — Go %q → \v, invalid in TOML
+		"../traversal",    // path traversal
+		"",                // empty string
+		"has space",       // spaces not allowed
+		"has/slash",       // slashes not allowed
+	}
+	for _, name := range invalidNames {
+		err := usersAddCmd(nil, name, "")
+		assert.Error(t, err, "expected error for deploy name %q", name)
+	}
+}
+
 func TestUsersAddWithNameDuplicate(t *testing.T) {
 	useTempDir(t)
 
