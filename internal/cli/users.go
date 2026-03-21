@@ -53,9 +53,9 @@ func usersAddCmd(args []string, deployName, deployKey string) error {
 		}
 		name = shhUserPrefix + deployName
 		if deployKey != "" {
-			// User provided a key
-			if !envutil.AgeKeyPattern.MatchString(deployKey) {
-				return errors.Newf("invalid age public key: %q", deployKey)
+			// User provided a key — parse it to validate the X25519 curve point, not just the format.
+			if _, err := age.ParseX25519Recipient(deployKey); err != nil {
+				return errors.Newf("invalid age public key %q: %v", deployKey, err)
 			}
 			newKey = deployKey
 		} else {
