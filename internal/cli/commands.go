@@ -99,6 +99,10 @@ func cmdEnv(file string, stderr io.Writer, checkTTY func() bool, quiet bool) err
 		return err
 	}
 	for _, k := range envutil.SortedKeys(secrets) {
+		if envutil.DangerousEnvVars[k] {
+			fmt.Fprintf(stderr, "warning: skipping dangerous env var %q from secrets file\n", k)
+			continue
+		}
 		fmt.Printf("export %s=%s\n", k, envutil.ShellQuote(secrets[k]))
 	}
 	return nil
