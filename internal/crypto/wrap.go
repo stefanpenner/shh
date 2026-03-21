@@ -53,5 +53,12 @@ func UnwrapDataKey(wrapped string, privateKey string) ([]byte, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "age decrypt data key")
 	}
-	return io.ReadAll(r)
+	key, err := io.ReadAll(r)
+	if err != nil {
+		return nil, errors.Wrap(err, "read unwrapped key")
+	}
+	if len(key) != 32 {
+		return nil, errors.Newf("unwrapped key has unexpected length %d (expected 32)", len(key))
+	}
+	return key, nil
 }

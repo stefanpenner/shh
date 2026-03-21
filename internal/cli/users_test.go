@@ -219,6 +219,35 @@ func TestUsersAddWithNameAndKey(t *testing.T) {
 	assert.Equal(t, pub2, loaded.Recipients["shh-user://staging-deploy"])
 }
 
+func TestUsersRemoveByDisplayNameAmbiguous(t *testing.T) {
+	useTempDir(t)
+
+	priv1, pub1 := generateTestKey(t)
+	_, pub2 := generateTestKey(t)
+	setTestAgeKey(t, priv1)
+
+	// GitHub user "alice" and a deploy key also named "alice" share the same display name.
+	secrets := map[string]string{"SECRET": "hello"}
+	recipients := map[string]string{
+		"https://github.com/alice": pub1,
+		"shh-user://alice":         pub2,
+	}
+	ef, err := encfile.EncryptSecrets(secrets, recipients)
+	require.NoError(t, err)
+	require.NoError(t, encfile.Save(".env.enc", ef))
+
+	// Removing by display name "alice" should fail with an ambiguous-match error,
+	// not silently remove both (or a random) recipient.
+	err = usersRemoveCmd([]string{"alice"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ambiguous")
+
+	// Both recipients should still be present.
+	loaded, err := encfile.Load(".env.enc")
+	require.NoError(t, err)
+	assert.Len(t, loaded.Recipients, 2)
+}
+
 func TestUsersAddWithNameRequiresName(t *testing.T) {
 	// No positional arg, no --name → error
 	err := usersAddCmd(nil, "", "")
