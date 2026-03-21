@@ -41,6 +41,11 @@ func ToAge(data []byte, keyPath string) (*string, *string, error) {
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "read passphrase")
 	}
+	defer func() {
+		for i := range passphrase {
+			passphrase[i] = 0
+		}
+	}()
 
 	return sshtoa.SSHPrivateKeyToAge(data, passphrase)
 }
