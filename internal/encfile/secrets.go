@@ -10,6 +10,21 @@ import (
 	"github.com/stefanpenner/shh/internal/crypto"
 )
 
+// verifyMAC checks the file MAC using the already-unwrapped dataKey.
+// It handles both v1 and v2 file formats.
+func verifyMAC(ef *EncryptedFile, dataKey []byte) error {
+	var expected string
+	if ef.Version == 1 {
+		expected = crypto.ComputeMACv1(dataKey, ef.Version, ef.DataKey, ef.Recipients, ef.Secrets)
+	} else {
+		expected = crypto.ComputeMAC(dataKey, ef.Version, ef.WrappedKeys, ef.Recipients, ef.Secrets)
+	}
+	if !hmac.Equal([]byte(expected), []byte(ef.MAC)) {
+		return errors.New("MAC verification failed — file may be tampered")
+	}
+	return nil
+}
+
 func EncryptSecrets(secrets map[string]string, recipients map[string]string) (*EncryptedFile, error) {
 	dataKey, err := crypto.GenerateDataKey()
 	if err != nil {
@@ -65,7 +80,6 @@ func DecryptSecrets(ef *EncryptedFile, privateKey string) (map[string]string, er
 	}
 
 	var dataKey []byte
-	var expected string
 
 	if ef.Version == 1 {
 		// v1: single wrapped data key
@@ -73,7 +87,6 @@ func DecryptSecrets(ef *EncryptedFile, privateKey string) (map[string]string, er
 		if err != nil {
 			return nil, errors.Wrap(err, "decrypt data key")
 		}
-		expected = crypto.ComputeMACv1(dataKey, ef.Version, ef.DataKey, ef.Recipients, ef.Secrets)
 	} else {
 		// v2: per-recipient wrapped keys
 		wrappedKey, ok := ef.WrappedKeys[myRecipientName]
@@ -84,12 +97,11 @@ func DecryptSecrets(ef *EncryptedFile, privateKey string) (map[string]string, er
 		if err != nil {
 			return nil, errors.Wrap(err, "decrypt data key")
 		}
-		expected = crypto.ComputeMAC(dataKey, ef.Version, ef.WrappedKeys, ef.Recipients, ef.Secrets)
 	}
 
 	// Verify MAC
-	if !hmac.Equal([]byte(expected), []byte(ef.MAC)) {
-		return nil, errors.New("MAC verification failed — file may be tampered")
+	if err := verifyMAC(ef, dataKey); err != nil {
+		return nil, err
 	}
 
 	secrets := make(map[string]string, len(ef.Secrets))
@@ -134,6 +146,14 @@ func ReWrapDataKey(ef *EncryptedFile, newRecipients map[string]string, privateKe
 	}
 	if err != nil {
 		return errors.Wrap(err, "decrypt data key")
+	}
+
+	// Verify MAC before trusting and re-wrapping the data key.
+	// Without this check, an attacker who can modify .env.enc could substitute
+	// a crafted wrapped_key that decrypts to an attacker-controlled data key,
+	// and users add/remove would silently re-wrap the attacker's key for all recipients.
+	if err := verifyMAC(ef, dataKey); err != nil {
+		return err
 	}
 
 	newWrappedKeys, err := crypto.WrapDataKeyPerRecipient(dataKey, newRecipients)
