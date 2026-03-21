@@ -18,6 +18,10 @@ var (
 		"PATH": true, "HOME": true, "SHELL": true, "USER": true, "LOGNAME": true,
 		"LD_PRELOAD": true, "LD_LIBRARY_PATH": true,
 		"DYLD_INSERT_LIBRARIES": true, "DYLD_LIBRARY_PATH": true, "DYLD_FRAMEWORK_PATH": true,
+		// Shell startup files: bash sources BASH_ENV on non-interactive invocations;
+		// sh sources ENV. Storing these as secrets and injecting them into `shh shell`
+		// or `shh run` would execute arbitrary code at shell startup.
+		"BASH_ENV": true, "ENV": true,
 	}
 )
 

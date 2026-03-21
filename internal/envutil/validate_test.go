@@ -105,7 +105,8 @@ func TestValidateEnvName(t *testing.T) {
 func TestDangerousEnvVarDenylist(t *testing.T) {
 	blocked := []string{"PATH", "HOME", "SHELL", "USER", "LOGNAME",
 		"LD_PRELOAD", "LD_LIBRARY_PATH",
-		"DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH"}
+		"DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH",
+		"BASH_ENV", "ENV"}
 	for _, key := range blocked {
 		t.Run(key, func(t *testing.T) {
 			assert.True(t, DangerousEnvVars[key], "%s should be in denylist", key)

@@ -178,7 +178,7 @@ func cmdEdit(file string) error {
 	editorCmd.Stdin = os.Stdin
 	editorCmd.Stdout = os.Stdout
 	editorCmd.Stderr = os.Stderr
-	editorCmd.Env = envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY")
+	editorCmd.Env = envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY", "SHH_PLAINTEXT")
 	if err := editorCmd.Run(); err != nil {
 		return errors.Wrap(err, "editor")
 	}
