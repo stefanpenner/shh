@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/cockroachdb/errors"
@@ -134,8 +135,13 @@ func cmdEdit(file string) error {
 		}
 	}
 
-	// Write to temp file
-	tmpFile, err := os.CreateTemp("", "shh-edit-*.env")
+	// Write to temp file in the same directory as the encrypted file so that
+	// plaintext secrets are not written to a potentially unencrypted /tmp.
+	editDir := filepath.Dir(file)
+	if editDir == "" {
+		editDir = "."
+	}
+	tmpFile, err := os.CreateTemp(editDir, ".shh-edit-*.env")
 	if err != nil {
 		return errors.Wrap(err, "create temp file")
 	}
