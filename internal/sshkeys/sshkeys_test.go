@@ -99,9 +99,8 @@ func TestFindEd25519Keys_IncludesPassphraseProtected(t *testing.T) {
 	protectedData := generatePassphraseProtectedTestKey(t, "my-passphrase")
 	require.NoError(t, os.WriteFile(filepath.Join(sshDir, "id_ed25519_protected"), protectedData, 0600))
 
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpHome)
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome) // Windows: os.UserHomeDir uses %USERPROFILE%
 
 	keys := FindEd25519Keys()
 	assert.Len(t, keys, 2, "should find both protected and unprotected keys")
