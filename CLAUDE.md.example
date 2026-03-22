@@ -1,0 +1,33 @@
+# Secrets Management (shh)
+
+This project uses [shh](https://github.com/stefanpenner/shh) for encrypted secrets.
+Secrets are stored in `.env.enc` (age-encrypted TOML, safe to commit).
+
+## Quick reference
+
+- `shh login` — Set up your key (first time)
+- `shh set KEY value` — Add/update a secret (`shh set KEY -` to read from stdin)
+- `shh rm KEY` — Remove a secret
+- `shh list` — Show secret names (no values)
+- `shh edit` — Edit all secrets in $EDITOR
+- `shh run -- <cmd>` — Run a command with secrets injected
+- `shh shell` — Interactive shell with secrets loaded
+- `shh env` — Print export statements
+- `shh users add <github-username>` — Grant access to a teammate
+- `shh users remove <user>` — Revoke access (rotates data key)
+- `shh doctor` — Health check
+
+## Rules
+
+- NEVER commit plaintext `.env` files
+- NEVER log, print, or echo secret values
+- Use `shh set KEY -` (stdin) instead of `shh set KEY value` to avoid exposing values in shell history / `ps`
+- When adding env vars to code, use `shh set` — do not edit `.env.enc` by hand
+- After `shh users remove`, the data key is rotated — all secrets are re-encrypted
+- CI uses `SHH_AGE_KEY` env var (deploy key) — never print or log it
+
+## Multiple environments
+
+- Default: `.env.enc`
+- `shh -e staging set KEY value` uses `staging.env.enc`
+- `shh -e production set KEY value` uses `production.env.enc`
