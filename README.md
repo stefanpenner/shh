@@ -168,6 +168,15 @@ For proactive conflict prevention:
     driver = shh merge %O %A %B
 ```
 
+## Claude Code Integration
+
+If your team uses [Claude Code](https://claude.com/claude-code), copy [`CLAUDE.md.example`](CLAUDE.md.example) into your project's `CLAUDE.md` (or append it to an existing one). This teaches Claude how to manage secrets with `shh` — it will use the right commands, avoid leaking values, and follow best practices automatically.
+
+```bash
+# In your project directory:
+curl -sL https://raw.githubusercontent.com/stefanpenner/shh/main/CLAUDE.md.example >> CLAUDE.md
+```
+
 ## License
 
 [MIT](LICENSE)
