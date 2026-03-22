@@ -31,6 +31,21 @@ var (
 		// PROMPT_COMMAND is executed as a shell command before each prompt;
 		// injecting it allows arbitrary code execution in interactive shells.
 		"PROMPT_COMMAND": true,
+		// Zsh startup directory: overriding ZDOTDIR redirects zsh to source
+		// attacker-controlled startup files, equivalent to BASH_ENV for zsh.
+		"ZDOTDIR": true,
+		// Runtime-level code injection: these variables instruct language runtimes
+		// to load attacker-controlled code before any application logic runs.
+		// A rogue recipient who can craft a valid .env.enc (with knowledge of the
+		// data key) could use these to achieve code execution via `shh run`.
+		"NODE_OPTIONS":        true, // Node.js: --require / --experimental-loader load arbitrary code
+		"JAVA_TOOL_OPTIONS":   true, // JVM: -agentlib/-agentpath load native agents
+		"_JAVA_OPTIONS":       true, // alternative JVM option variable (same risk)
+		"JDK_JAVA_OPTIONS":    true, // Java 9+ launcher option variable (same risk)
+		"PYTHONSTARTUP":       true, // Python: executes an arbitrary file on interpreter startup
+		"RUBYOPT":             true, // Ruby: -r flag loads an arbitrary file on startup
+		"PERL5OPT":            true, // Perl: -M flag loads an arbitrary module on startup
+		"DOTNET_STARTUP_HOOKS": true, // .NET: loads an arbitrary assembly before Main()
 	}
 )
 
