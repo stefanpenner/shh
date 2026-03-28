@@ -11,7 +11,7 @@ import (
 	"github.com/stefanpenner/shh/internal/envutil"
 )
 
-func ParsePlaintext(content string) map[string]string {
+func ParsePlaintext(content string) (map[string]string, error) {
 	m := make(map[string]string)
 	scanner := bufio.NewScanner(strings.NewReader(content))
 	for scanner.Scan() {
@@ -23,7 +23,10 @@ func ParsePlaintext(content string) map[string]string {
 			m[line[:idx]] = line[idx+1:]
 		}
 	}
-	return m
+	if err := scanner.Err(); err != nil {
+		return nil, errors.Wrap(err, "parse plaintext")
+	}
+	return m, nil
 }
 
 func FormatPlaintext(secrets map[string]string) string {
@@ -43,7 +46,7 @@ func LoadSecrets(encFile string, privateKey string) (map[string]string, error) {
 		if err != nil {
 			return nil, errors.Wrapf(err, "read plaintext file %s", plainFile)
 		}
-		return ParsePlaintext(string(data)), nil
+		return ParsePlaintext(string(data))
 	}
 
 	ef, err := Load(encFile)

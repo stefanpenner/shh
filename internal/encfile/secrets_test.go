@@ -317,7 +317,8 @@ func TestParsePlaintext(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ParsePlaintext(tt.input)
+			got, err := ParsePlaintext(tt.input)
+			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -376,6 +377,6 @@ func FuzzParsePlaintext(f *testing.F) {
 	f.Add("# comment\nKEY=value")
 	f.Add("NO_EQUALS_SIGN")
 	f.Fuzz(func(t *testing.T, input string) {
-		ParsePlaintext(input)
+		ParsePlaintext(input) //nolint:errcheck -- fuzz: only checking for panics, not errors
 	})
 }
