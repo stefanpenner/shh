@@ -26,7 +26,10 @@ func cmdEncrypt(src string) error {
 		return errors.Wrap(err, "read file")
 	}
 
-	secrets := encfile.ParsePlaintext(string(plaintext))
+	secrets, err := encfile.ParsePlaintext(string(plaintext))
+	if err != nil {
+		return errors.Wrap(err, "parse plaintext file")
+	}
 
 	// Validate key names to match the same rules enforced by cmdEdit and cmdSet.
 	for k := range secrets {
@@ -207,7 +210,10 @@ func cmdEdit(file string) error {
 		return errors.Wrap(err, "read edited file")
 	}
 
-	newSecrets := encfile.ParsePlaintext(string(edited))
+	newSecrets, err := encfile.ParsePlaintext(string(edited))
+	if err != nil {
+		return errors.Wrap(err, "parse edited secrets")
+	}
 
 	for k := range newSecrets {
 		if !envutil.EnvVarKeyPattern.MatchString(k) {
