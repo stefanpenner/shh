@@ -370,6 +370,48 @@ func TestLoadSecrets_PlaintextFileNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "read plaintext file")
 }
 
+// TestPlaintextEscapeRoundtrip verifies that values with embedded newlines,
+// carriage returns, and backslashes survive a FormatPlaintext → ParsePlaintext
+// roundtrip. This is the path exercised by `shh edit`.
+func TestPlaintextEscapeRoundtrip(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{"plain", "hello"},
+		{"newline", "line1\nline2\nline3"},
+		{"crlf", "line1\r\nline2"},
+		{"backslash", `C:\Program Files\node`},
+		{"backslash-n sequence", `literal \n in value`},
+		{"pem-like", "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----"},
+		{"empty", ""},
+		{"only newlines", "\n\n\n"},
+		{"backslash then n", `foo\nbar`},
+		{"double backslash", `foo\\bar`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			secrets := map[string]string{"KEY": tt.value}
+			formatted := FormatPlaintext(secrets)
+			parsed := ParsePlaintext(formatted)
+			assert.Equal(t, tt.value, parsed["KEY"], "value should survive FormatPlaintext→ParsePlaintext roundtrip")
+		})
+	}
+}
+
+// TestPlaintextEscapeRoundtrip_MultiKey ensures multiple keys with special
+// values all survive the roundtrip without bleeding into each other.
+func TestPlaintextEscapeRoundtrip_MultiKey(t *testing.T) {
+	secrets := map[string]string{
+		"PEM_KEY":  "-----BEGIN RSA PRIVATE KEY-----\nMIIEow==\n-----END RSA PRIVATE KEY-----",
+		"SIMPLE":   "no-special-chars",
+		"BACKSLASH": `path\to\thing`,
+	}
+	formatted := FormatPlaintext(secrets)
+	parsed := ParsePlaintext(formatted)
+	assert.Equal(t, secrets, parsed)
+}
+
 func FuzzParsePlaintext(f *testing.F) {
 	f.Add("FOO=bar\nBAZ=qux")
 	f.Add("")
