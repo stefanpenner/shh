@@ -46,6 +46,13 @@ var (
 		"RUBYOPT":             true, // Ruby: -r flag loads an arbitrary file on startup
 		"PERL5OPT":            true, // Perl: -M flag loads an arbitrary module on startup
 		"DOTNET_STARTUP_HOOKS": true, // .NET: loads an arbitrary assembly before Main()
+		// Library load-path injection: these variables prepend attacker-controlled
+		// directories to the runtime's module search path. Combined with a writable
+		// directory earlier in the path, they allow loading malicious modules on
+		// the next import — analogous to RUBYOPT/PERL5OPT but via path hijacking.
+		"PYTHONPATH": true, // Python: prepends directories to sys.path
+		"RUBYLIB":    true, // Ruby: prepends directories to $LOAD_PATH
+		"PERL5LIB":   true, // Perl: prepends directories to @INC
 	}
 )
 
