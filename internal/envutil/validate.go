@@ -46,6 +46,17 @@ var (
 		"RUBYOPT":             true, // Ruby: -r flag loads an arbitrary file on startup
 		"PERL5OPT":            true, // Perl: -M flag loads an arbitrary module on startup
 		"DOTNET_STARTUP_HOOKS": true, // .NET: loads an arbitrary assembly before Main()
+		// Module / class search-path injection: a rogue recipient who can craft .env.enc
+		// could redirect these to an attacker-controlled directory, causing the runtime to
+		// load malicious modules when the target runs `shh run -- <interpreter> app`.
+		// These are lower-risk than the startup-file variables above (they require the
+		// attacker to also place files at the redirected path), but are included for
+		// defence-in-depth.
+		"PYTHONPATH": true, // Python: prepends directories to sys.path; shadows stdlib/app modules
+		"NODE_PATH":  true, // Node.js: additional module search directories
+		"PERL5LIB":   true, // Perl: prepends directories to @INC; shadows installed modules
+		"RUBYLIB":    true, // Ruby: prepends directories to $LOAD_PATH
+		"CLASSPATH":  true, // JVM: class search path; can override application classes
 	}
 )
 
