@@ -76,6 +76,12 @@ var (
 		// GLIBC_TUNABLES (glibc ≥ 2.33) alters allocator and other glibc internals;
 		// CVE-2023-4911 (Looney Tunables) demonstrated privilege escalation via this vector.
 		"GLIBC_TUNABLES": true,
+		// SSH agent socket: injecting an attacker-controlled socket path causes child
+		// processes to forward SSH private-key operations to the attacker's agent.
+		"SSH_AUTH_SOCK": true,
+		// GPG home directory: redirecting to an attacker-controlled path loads bogus keys
+		// and configuration, enabling signature forgery or decryption key substitution.
+		"GNUPGHOME": true,
 	}
 )
 
