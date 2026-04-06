@@ -46,6 +46,42 @@ var (
 		"RUBYOPT":             true, // Ruby: -r flag loads an arbitrary file on startup
 		"PERL5OPT":            true, // Perl: -M flag loads an arbitrary module on startup
 		"DOTNET_STARTUP_HOOKS": true, // .NET: loads an arbitrary assembly before Main()
+		// Module / class search-path injection: a rogue recipient who can craft .env.enc
+		// could redirect these to an attacker-controlled directory, causing the runtime to
+		// load malicious modules when the target runs `shh run -- <interpreter> app`.
+		// These are lower-risk than the startup-file variables above (they require the
+		// attacker to also place files at the redirected path), but are included for
+		// defence-in-depth.
+		"PYTHONPATH": true, // Python: prepends directories to sys.path; shadows stdlib/app modules
+		"PYTHONHOME": true, // Python: redirects the standard library location entirely
+		"NODE_PATH":  true, // Node.js: additional module search directories
+		"PERL5LIB":   true, // Perl: prepends directories to @INC; shadows installed modules
+		"PERLLIB":    true, // Perl: legacy equivalent of PERL5LIB (same risk)
+		"RUBYLIB":    true, // Ruby: prepends directories to $LOAD_PATH
+		"GEM_HOME":   true, // Ruby: overrides where gems are installed and loaded from
+		"GEM_PATH":   true, // Ruby: overrides the gem search path
+		"CLASSPATH":  true, // JVM: class search path; can override application classes
+		// TLS / PKI override: substituting the certificate bundle or OpenSSL config
+		// allows a rogue recipient to MITM TLS connections made by child processes.
+		"SSL_CERT_FILE": true, // replaces the trusted CA bundle (OpenSSL, curl, wget, etc.)
+		"SSL_CERT_DIR":  true, // replaces the trusted CA directory (same risk)
+		"OPENSSL_CONF":  true, // full OpenSSL configuration override (engines, CAs, ciphers)
+		// OS-level injection
+		// LD_AUDIT is the Linux linker audit interface; it loads a shared library
+		// into every process, functionally equivalent to LD_PRELOAD but less scrutinised.
+		"LD_AUDIT": true,
+		// DYLD_FORCE_FLAT_NAMESPACE collapses macOS two-level symbol namespaces which
+		// can cause unintended symbol hijacking between libraries.
+		"DYLD_FORCE_FLAT_NAMESPACE": true,
+		// GLIBC_TUNABLES (glibc ≥ 2.33) alters allocator and other glibc internals;
+		// CVE-2023-4911 (Looney Tunables) demonstrated privilege escalation via this vector.
+		"GLIBC_TUNABLES": true,
+		// SSH agent socket: injecting an attacker-controlled socket path causes child
+		// processes to forward SSH private-key operations to the attacker's agent.
+		"SSH_AUTH_SOCK": true,
+		// GPG home directory: redirecting to an attacker-controlled path loads bogus keys
+		// and configuration, enabling signature forgery or decryption key substitution.
+		"GNUPGHOME": true,
 	}
 )
 
