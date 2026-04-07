@@ -43,9 +43,17 @@ var (
 		"_JAVA_OPTIONS":       true, // alternative JVM option variable (same risk)
 		"JDK_JAVA_OPTIONS":    true, // Java 9+ launcher option variable (same risk)
 		"PYTHONSTARTUP":       true, // Python: executes an arbitrary file on interpreter startup
+		"PYTHONPATH":          true, // Python: prepends attacker-controlled directories to the module search path
 		"RUBYOPT":             true, // Ruby: -r flag loads an arbitrary file on startup
+		"RUBYLIB":             true, // Ruby: prepends attacker-controlled directories to the library search path
 		"PERL5OPT":            true, // Perl: -M flag loads an arbitrary module on startup
+		"PERL5LIB":            true, // Perl: prepends attacker-controlled directories to @INC (module search path)
+		"PERLLIB":             true, // Perl: older form of PERL5LIB (same risk)
 		"DOTNET_STARTUP_HOOKS": true, // .NET: loads an arbitrary assembly before Main()
+		// Linux dynamic-linker and glibc injection
+		"LD_AUDIT":    true, // Linux: loads a native audit library into every dynamically-linked process (same power as LD_PRELOAD)
+		"GCONV_PATH":  true, // glibc: overrides the character-set conversion library path; exploitable via iconv()
+		"NLSPATH":     true, // glibc: overrides locale message-catalog search path; can load attacker-controlled .so via catopen()
 	}
 )
 
