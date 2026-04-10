@@ -30,6 +30,7 @@ func EncryptSecrets(secrets map[string]string, recipients map[string]string) (*E
 	if err != nil {
 		return nil, err
 	}
+	defer zeroKey(dataKey)
 
 	wrappedKeys, err := crypto.WrapDataKeyPerRecipient(dataKey, recipients)
 	if err != nil {
@@ -80,6 +81,7 @@ func DecryptSecrets(ef *EncryptedFile, privateKey string) (map[string]string, er
 	}
 
 	var dataKey []byte
+	defer func() { zeroKey(dataKey) }()
 
 	if ef.Version == 1 {
 		// v1: single wrapped data key
@@ -125,6 +127,7 @@ func ReWrapDataKey(ef *EncryptedFile, newRecipients map[string]string, privateKe
 
 	// Find our wrapped key (works for both v1 and v2)
 	var dataKey []byte
+	defer func() { zeroKey(dataKey) }()
 	if ef.Version == 1 {
 		dataKey, err = crypto.UnwrapDataKey(ef.DataKey, privateKey)
 	} else {
@@ -181,4 +184,13 @@ func DefaultRecipients(privateKey string, ghUsername string) (map[string]string,
 // publicKeyFrom derives the public key from an age private key string.
 func publicKeyFrom(privateKey string) (string, error) {
 	return crypto.PublicKeyFrom(privateKey)
+}
+
+// zeroKey overwrites a byte slice with zeros to reduce the window during which
+// a data key resides in process memory. Go's GC does not guarantee prompt
+// collection, so this is defence-in-depth against core dumps and memory forensics.
+func zeroKey(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }
