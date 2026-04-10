@@ -65,11 +65,13 @@ func usersAddCmd(args []string, deployName, deployKey string) error {
 				return errors.Wrap(err, "generate age key")
 			}
 			newKey = identity.Recipient().String()
-			fmt.Println(hintStyle.Render("Secret key (store this in your CI/deploy platform as SHH_AGE_KEY):"))
-			fmt.Println()
-			fmt.Printf("  SHH_AGE_KEY=%s\n", identity.String())
-			fmt.Println()
-			fmt.Println(hintStyle.Render("This is the only time this key will be displayed."))
+			// Print the private key to stderr to prevent accidental capture via
+			// stdout redirection (e.g. shh users add --name ci > log.txt).
+			fmt.Fprintln(os.Stderr, hintStyle.Render("Secret key (store this in your CI/deploy platform as SHH_AGE_KEY):"))
+			fmt.Fprintln(os.Stderr)
+			fmt.Fprintf(os.Stderr, "  SHH_AGE_KEY=%s\n", identity.String())
+			fmt.Fprintln(os.Stderr)
+			fmt.Fprintln(os.Stderr, hintStyle.Render("This is the only time this key will be displayed."))
 		}
 	} else if len(args) > 0 {
 		// GitHub / raw age key mode (existing behavior)
