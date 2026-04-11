@@ -94,6 +94,17 @@ func TestCmdRun_NoArgs(t *testing.T) {
 	assert.Contains(t, err.Error(), "no command specified")
 }
 
+func TestCmdRun_EmptyFileUsesDefaultEncFile(t *testing.T) {
+	useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+	setupEncryptedFile(t, ".env.enc", map[string]string{"FOO": "bar"}, pubKey)
+
+	// Empty file arg should auto-discover .env.enc in the current directory.
+	err := cmdRun("", []string{"true"})
+	assert.NoError(t, err)
+}
+
 func TestCmdRun_NonZeroExit(t *testing.T) {
 	useTempDir(t)
 	privKey, pubKey := generateTestKey(t)

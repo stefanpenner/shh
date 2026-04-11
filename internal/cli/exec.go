@@ -73,6 +73,9 @@ func cmdRun(file string, args []string) error {
 	if len(args) == 0 {
 		return errors.New("no command specified (usage: shh run -- <command> [args...])")
 	}
+	if file == "" {
+		file = envutil.FindEncFile()
+	}
 
 	privKey, err := keyring.GetKey()
 	if err != nil {
