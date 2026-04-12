@@ -104,12 +104,12 @@ func TestValidateEnvName(t *testing.T) {
 
 func TestDangerousEnvVarDenylist(t *testing.T) {
 	blocked := []string{"PATH", "HOME", "SHELL", "USER", "LOGNAME",
-		"LD_PRELOAD", "LD_LIBRARY_PATH",
+		"LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT",
 		"DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH",
 		"BASH_ENV", "ENV",
 		"ZDOTDIR",
 		"NODE_OPTIONS", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS",
-		"PYTHONSTARTUP", "RUBYOPT", "PERL5OPT", "DOTNET_STARTUP_HOOKS",
+		"PYTHONSTARTUP", "PYTHONPATH", "RUBYOPT", "PERL5OPT", "PERL5LIB", "DOTNET_STARTUP_HOOKS",
 	}
 	for _, key := range blocked {
 		t.Run(key, func(t *testing.T) {

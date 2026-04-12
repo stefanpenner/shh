@@ -43,9 +43,15 @@ var (
 		"_JAVA_OPTIONS":       true, // alternative JVM option variable (same risk)
 		"JDK_JAVA_OPTIONS":    true, // Java 9+ launcher option variable (same risk)
 		"PYTHONSTARTUP":       true, // Python: executes an arbitrary file on interpreter startup
+		"PYTHONPATH":          true, // Python: prepends directories to sys.path; attacker-placed modules shadow stdlib
 		"RUBYOPT":             true, // Ruby: -r flag loads an arbitrary file on startup
 		"PERL5OPT":            true, // Perl: -M flag loads an arbitrary module on startup
+		"PERL5LIB":            true, // Perl: prepends directories to @INC; same attack surface as PYTHONPATH
 		"DOTNET_STARTUP_HOOKS": true, // .NET: loads an arbitrary assembly before Main()
+		// Linux dynamic-linker audit interface: ld.so loads the named shared object
+		// as an audit library before all others, granting code execution — identical
+		// in severity to LD_PRELOAD but absent from many block-lists.
+		"LD_AUDIT": true,
 	}
 )
 
