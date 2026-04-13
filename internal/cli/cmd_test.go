@@ -88,6 +88,29 @@ func TestCmdRun_FiltersShhPlaintext(t *testing.T) {
 	assert.Error(t, err, "SHH_PLAINTEXT should not be in child environment")
 }
 
+func TestCmdRun_FiltersShhAgeKeyFromSecrets(t *testing.T) {
+	useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+	// SHH_AGE_KEY stored as a secret must not be injected into child env.
+	setupEncryptedFile(t, ".env.enc", map[string]string{"FOO": "bar", "SHH_AGE_KEY": "leaked-key"}, pubKey)
+
+	err := cmdRun(".env.enc", []string{"printenv", "SHH_AGE_KEY"})
+	assert.Error(t, err, "SHH_AGE_KEY injected via secrets must be filtered from child environment")
+}
+
+func TestCmdRun_FiltersShhPlaintextFromSecrets(t *testing.T) {
+	useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+	// SHH_PLAINTEXT stored as a secret must not be injected into child env;
+	// if it were, nested shh invocations would bypass encryption.
+	setupEncryptedFile(t, ".env.enc", map[string]string{"FOO": "bar", "SHH_PLAINTEXT": "/attacker/file"}, pubKey)
+
+	err := cmdRun(".env.enc", []string{"printenv", "SHH_PLAINTEXT"})
+	assert.Error(t, err, "SHH_PLAINTEXT injected via secrets must be filtered from child environment")
+}
+
 func TestCmdRun_NoArgs(t *testing.T) {
 	err := cmdRun(".env.enc", nil)
 	assert.Error(t, err)
