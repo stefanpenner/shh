@@ -46,6 +46,11 @@ var (
 		"RUBYOPT":             true, // Ruby: -r flag loads an arbitrary file on startup
 		"PERL5OPT":            true, // Perl: -M flag loads an arbitrary module on startup
 		"DOTNET_STARTUP_HOOKS": true, // .NET: loads an arbitrary assembly before Main()
+		// shh-internal variables: if injected into child processes that themselves
+		// invoke shh, these would redirect key lookups (SHH_AGE_KEY) or bypass
+		// encryption entirely (SHH_PLAINTEXT), defeating the security model.
+		"SHH_AGE_KEY":  true,
+		"SHH_PLAINTEXT": true,
 	}
 )
 

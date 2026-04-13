@@ -110,6 +110,8 @@ func TestDangerousEnvVarDenylist(t *testing.T) {
 		"ZDOTDIR",
 		"NODE_OPTIONS", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS",
 		"PYTHONSTARTUP", "RUBYOPT", "PERL5OPT", "DOTNET_STARTUP_HOOKS",
+		// shh-internal vars must not be injectable into child processes
+		"SHH_AGE_KEY", "SHH_PLAINTEXT",
 	}
 	for _, key := range blocked {
 		t.Run(key, func(t *testing.T) {
