@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"filippo.io/age/plugin"
@@ -20,6 +21,9 @@ func buildStubPlugin(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "age-plugin-shhtest")
+	if runtime.GOOS == "windows" {
+		bin += ".exe" // age resolves age-plugin-<name> via PATHEXT on Windows
+	}
 	out, err := exec.Command("go", "build", "-o", bin, "../crypto/testdata/age-plugin-shhtest").CombinedOutput()
 	require.NoError(t, err, "build stub plugin: %s", out)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))

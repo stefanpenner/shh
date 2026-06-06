@@ -1,7 +1,6 @@
 package crypto
 
 import (
-	"crypto/sha256"
 	"strings"
 
 	"filippo.io/age"
@@ -34,8 +33,10 @@ func IdentityFromPassphrase(passphrase string) (*age.X25519Identity, error) {
 	if strings.TrimSpace(passphrase) == "" {
 		return nil, errors.New("empty passphrase")
 	}
-	salt := sha256.Sum256([]byte(passphraseSaltLabel))
-	seed := argon2.IDKey([]byte(passphrase), salt[:], argonTime, argonMemoryKiB, argonThreads, 32)
+	// The salt is the fixed public label itself (argon2 only needs >= 8 bytes).
+	// Only the passphrase feeds the KDF; nothing sensitive is hashed elsewhere.
+	salt := []byte(passphraseSaltLabel)
+	seed := argon2.IDKey([]byte(passphrase), salt, argonTime, argonMemoryKiB, argonThreads, 32)
 
 	s, err := bech32Encode("age-secret-key-", seed)
 	if err != nil {
