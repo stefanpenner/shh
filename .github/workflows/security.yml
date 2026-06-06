@@ -11,8 +11,6 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    outputs:
-      report: ${{ steps.report.outputs.SCAN_REPORT }}
     steps:
       - uses: actions/checkout@v4
 
@@ -27,77 +25,18 @@ jobs:
           go install github.com/securego/gosec/v2/cmd/gosec@latest
           go install honnef.co/go/tools/cmd/staticcheck@latest
 
-      - name: Run scans
-        id: report
-        run: |
-          # Random delimiter so tool output can't forge the heredoc terminator
-          # and inject arbitrary step outputs.
-          delim="SCAN_EOF_$(openssl rand -hex 16)"
-          {
-            echo "SCAN_REPORT<<${delim}"
+      # These are informational (continue-on-error) so a newly-disclosed stdlib
+      # CVE in govulncheck can't turn the build red on its own. Deep SAST gating
+      # is handled by the CodeQL workflow; the steps below surface their real
+      # pass/fail status in the run without blocking.
+      - name: govulncheck
+        continue-on-error: true
+        run: govulncheck ./...
 
-            echo '## govulncheck'
-            govulncheck ./... 2>&1 || true
-            echo ''
+      - name: gosec
+        continue-on-error: true
+        run: gosec ./...
 
-            echo '## gosec'
-            gosec -fmt=json ./... 2>&1 || true
-            echo ''
-
-            echo '## staticcheck'
-            staticcheck ./... 2>&1 || true
-
-            echo "${delim}"
-          } >> "$GITHUB_OUTPUT"
-
-  ai-security-review:
-    needs: scan
-    runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: write
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: stable
-          cache: true
-
-      - name: Build prompt with scan results
-        env:
-          # Pass the scan report via the environment, never interpolated into
-          # the shell. Interpolating ${{ ... }} directly into the script let
-          # report content break the quoting and the heredoc delimiter.
-          SCAN_REPORT: ${{ needs.scan.outputs.report }}
-        run: |
-          # Random delimiter so report content can't forge the terminator and
-          # inject arbitrary environment variables into $GITHUB_ENV.
-          delim="SECURITY_PROMPT_EOF_$(openssl rand -hex 16)"
-          {
-            echo "SECURITY_PROMPT<<${delim}"
-            cat .github/security-review-prompt.md
-            echo ''
-            echo '## Static analysis results'
-            echo ''
-            echo 'The following findings were reported by govulncheck, gosec, and staticcheck.'
-            echo 'Triage each finding: fix real issues, and add // nolint or #nosec annotations'
-            echo 'with justifications for false positives. Include all fixes in your PR.'
-            echo ''
-            echo '```'
-            printf '%s\n' "$SCAN_REPORT"
-            echo '```'
-            echo "${delim}"
-          } >> "$GITHUB_ENV"
-
-      - name: AI adversarial security review
-        uses: anthropics/claude-code-action@v1
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          prompt: ${{ env.SECURITY_PROMPT }}
-          claude_args: "--allowedTools Edit Write Bash Read Grep Glob WebSearch WebFetch"
+      - name: staticcheck
+        continue-on-error: true
+        run: staticcheck ./...
