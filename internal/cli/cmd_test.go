@@ -187,6 +187,78 @@ func TestCmdEnv_QuietSuppressesWarning(t *testing.T) {
 	assert.Empty(t, stderr2.String())
 }
 
+// --- Get command tests ---
+
+func TestCmdGet_PrintsValue(t *testing.T) {
+	useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+	setupEncryptedFile(t, ".env.enc", map[string]string{"API_KEY": "my-key", "DB_PASS": "secret"}, pubKey)
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	var stderr bytes.Buffer
+	err := cmdGet(".env.enc", "API_KEY", &stderr, func() bool { return true }, false)
+	w.Close()
+	os.Stdout = oldStdout
+
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+	assert.Equal(t, "my-key\n", buf.String())
+	assert.Empty(t, stderr.String())
+}
+
+func TestCmdGet_MissingKey(t *testing.T) {
+	useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+	setupEncryptedFile(t, ".env.enc", map[string]string{"API_KEY": "my-key"}, pubKey)
+
+	var stderr bytes.Buffer
+	err := cmdGet(".env.enc", "NOPE", &stderr, func() bool { return true }, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestCmdGet_WarnsWhenNotTTY(t *testing.T) {
+	useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+	setupEncryptedFile(t, ".env.enc", map[string]string{"SECRET": "hello"}, pubKey)
+
+	oldStdout := os.Stdout
+	_, w, _ := os.Pipe()
+	os.Stdout = w
+	var stderr bytes.Buffer
+	err := cmdGet(".env.enc", "SECRET", &stderr, func() bool { return false }, false)
+	w.Close()
+	os.Stdout = oldStdout
+
+	require.NoError(t, err)
+	assert.Contains(t, stderr.String(), "warning:")
+}
+
+func TestCmdGet_QuietSuppressesWarning(t *testing.T) {
+	useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+	setupEncryptedFile(t, ".env.enc", map[string]string{"SECRET": "hello"}, pubKey)
+
+	oldStdout := os.Stdout
+	_, w, _ := os.Pipe()
+	os.Stdout = w
+	var stderr bytes.Buffer
+	err := cmdGet(".env.enc", "SECRET", &stderr, func() bool { return false }, true)
+	w.Close()
+	os.Stdout = oldStdout
+
+	require.NoError(t, err)
+	assert.Empty(t, stderr.String())
+}
+
 // --- Template command tests ---
 
 func TestCmdTemplate(t *testing.T) {

@@ -36,6 +36,7 @@ No plaintext `.env` file ever touches disk.
 
 ```bash
 shh set KEY value                     # add or update a secret
+shh get KEY                           # print a single secret value
 shh rm KEY                            # remove a secret
 shh edit                              # edit all secrets in $EDITOR
 shh list                              # list secret names
