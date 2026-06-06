@@ -86,9 +86,9 @@ func cmdList(file string) error {
 	return nil
 }
 
-func cmdEnv(file string, stderr io.Writer, checkTTY func() bool, quiet bool) error {
-	if !quiet && !checkTTY() {
-		fmt.Fprintln(stderr, "warning: writing secrets to stdout (not a terminal)")
+func cmdEnv(file string, stdout bool, stderr io.Writer) error {
+	if !stdout {
+		return errors.New("refusing to write secrets to stdout; pass --stdout to confirm (e.g. eval $(shh env --stdout))")
 	}
 	privKey, err := keyring.GetKey()
 	if err != nil {
