@@ -15,6 +15,9 @@ var (
 	envNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 
 	DangerousEnvVars = map[string]bool{
+		// shh's own security knobs: a secret must never be able to widen the age
+		// plugin allowlist or override the decryption key/plaintext source.
+		"SHH_ALLOWED_AGE_PLUGINS": true,
 		// Core identity / path variables
 		"PATH": true, "HOME": true, "SHELL": true, "USER": true, "LOGNAME": true,
 		// Linux dynamic-linker injection
@@ -38,13 +41,13 @@ var (
 		// to load attacker-controlled code before any application logic runs.
 		// A rogue recipient who can craft a valid .env.enc (with knowledge of the
 		// data key) could use these to achieve code execution via `shh run`.
-		"NODE_OPTIONS":        true, // Node.js: --require / --experimental-loader load arbitrary code
-		"JAVA_TOOL_OPTIONS":   true, // JVM: -agentlib/-agentpath load native agents
-		"_JAVA_OPTIONS":       true, // alternative JVM option variable (same risk)
-		"JDK_JAVA_OPTIONS":    true, // Java 9+ launcher option variable (same risk)
-		"PYTHONSTARTUP":       true, // Python: executes an arbitrary file on interpreter startup
-		"RUBYOPT":             true, // Ruby: -r flag loads an arbitrary file on startup
-		"PERL5OPT":            true, // Perl: -M flag loads an arbitrary module on startup
+		"NODE_OPTIONS":         true, // Node.js: --require / --experimental-loader load arbitrary code
+		"JAVA_TOOL_OPTIONS":    true, // JVM: -agentlib/-agentpath load native agents
+		"_JAVA_OPTIONS":        true, // alternative JVM option variable (same risk)
+		"JDK_JAVA_OPTIONS":     true, // Java 9+ launcher option variable (same risk)
+		"PYTHONSTARTUP":        true, // Python: executes an arbitrary file on interpreter startup
+		"RUBYOPT":              true, // Ruby: -r flag loads an arbitrary file on startup
+		"PERL5OPT":             true, // Perl: -M flag loads an arbitrary module on startup
 		"DOTNET_STARTUP_HOOKS": true, // .NET: loads an arbitrary assembly before Main()
 	}
 )

@@ -38,6 +38,30 @@ func TestAllowlistAllowsKnownPlugins(t *testing.T) {
 	require.NoError(t, crypto.ValidateRecipient(encodePluginRecipient(t, "se")))
 }
 
+// The identity path also execs age-plugin-<name> (on decrypt). A disallowed
+// plugin identity (e.g. via SHH_AGE_KEY) must be rejected before any exec.
+func TestAllowlistRejectsUnknownPluginIdentity(t *testing.T) {
+	data := make([]byte, 32)
+	_, err := rand.Read(data)
+	require.NoError(t, err)
+	evil := plugin.EncodeIdentity("evil", data)
+
+	require.Error(t, crypto.ValidateIdentity(evil), "unknown plugin identity must fail validation")
+
+	_, err = crypto.ParseIdentity(evil)
+	require.Error(t, err)
+	require.NotContains(t, strings.ToLower(err.Error()), "plugin not found",
+		"must be rejected by the allowlist, not by a failed exec")
+}
+
+func TestAllowlistAllowsKnownPluginIdentity(t *testing.T) {
+	data := make([]byte, 32)
+	_, err := rand.Read(data)
+	require.NoError(t, err)
+	require.NoError(t, crypto.ValidateIdentity(plugin.EncodeIdentity("yubikey", data)))
+	require.NoError(t, crypto.ValidateIdentity(plugin.EncodeIdentity("se", data)))
+}
+
 func TestAllowlistEnvOverride(t *testing.T) {
 	tpm := encodePluginRecipient(t, "tpm")
 	require.Error(t, crypto.ValidateRecipient(tpm), "tpm not allowed by default")

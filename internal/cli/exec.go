@@ -39,7 +39,7 @@ func cmdShell(file string) error {
 		return err
 	}
 
-	env := appendSecrets(envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY", "SHH_PLAINTEXT"), secrets)
+	env := appendSecrets(envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY", "SHH_PLAINTEXT", "SHH_ALLOWED_AGE_PLUGINS"), secrets)
 
 	shell := os.Getenv("SHELL")
 	if shell == "" {
@@ -89,7 +89,7 @@ func cmdRun(file string, args []string) error {
 		return err
 	}
 
-	env := appendSecrets(envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY", "SHH_PLAINTEXT"), secrets)
+	env := appendSecrets(envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY", "SHH_PLAINTEXT", "SHH_ALLOWED_AGE_PLUGINS"), secrets)
 
 	cmd := exec.Command(args[0], args[1:]...) // #nosec G204
 	cmd.Stdin = os.Stdin
