@@ -48,8 +48,8 @@ func readNewPassphrase() (string, error) {
 		return "", err
 	}
 	// Trim before compare/length so enrollment matches what IdentityFromPassphrase
-	// derives (which also trims).
-	p1, p2 = strings.TrimSpace(p1), strings.TrimSpace(p2)
+	// derives (same Cf-aware trim).
+	p1, p2 = crypto.TrimPassphrase(p1), crypto.TrimPassphrase(p2)
 	if p1 != p2 {
 		return "", errors.New("passphrases do not match")
 	}

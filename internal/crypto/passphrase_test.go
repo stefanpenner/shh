@@ -37,6 +37,15 @@ func TestIdentityFromPassphraseTrimsWhitespace(t *testing.T) {
 	require.Equal(t, clean.String(), padded.String(), "whitespace must be trimmed before the KDF")
 }
 
+// Invisible zero-width / format chars must not fork the derived key either.
+func TestIdentityFromPassphraseTrimsZeroWidth(t *testing.T) {
+	clean, err := crypto.IdentityFromPassphrase(testPhrase)
+	require.NoError(t, err)
+	weird, err := crypto.IdentityFromPassphrase("\u200b\ufeff" + testPhrase + "\u200b")
+	require.NoError(t, err)
+	require.Equal(t, clean.String(), weird.String(), "zero-width/Cf chars must be trimmed")
+}
+
 func TestIdentityFromPassphraseRejectsEmpty(t *testing.T) {
 	_, err := crypto.IdentityFromPassphrase("")
 	require.Error(t, err)

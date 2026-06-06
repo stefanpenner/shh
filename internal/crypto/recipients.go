@@ -86,7 +86,12 @@ func ParseRecipient(s string) (age.Recipient, error) {
 // (AGE-SECRET-KEY-…). Using a plugin identity to decrypt invokes the plugin and
 // its hardware (touch/PIN/biometric).
 func ParseIdentity(s string) (age.Identity, error) {
-	if _, _, err := plugin.ParseIdentity(s); err == nil {
+	if name, _, err := plugin.ParseIdentity(s); err == nil {
+		// Allowlist check BEFORE NewIdentity, which would exec age-plugin-<name>.
+		// SHH_AGE_KEY is attacker-controllable in CI, so this is an exec gate too.
+		if !pluginAllowed(name) {
+			return nil, errors.Newf("identity uses age plugin %q, which is not allowed (set SHH_ALLOWED_AGE_PLUGINS to permit it)", name)
+		}
 		id, err := plugin.NewIdentity(s, pluginUI())
 		if err != nil {
 			return nil, errors.Wrap(err, "parse plugin identity")
@@ -119,7 +124,10 @@ func ValidateRecipient(s string) error {
 // X25519). Encoding-only: it does not run a plugin binary or touch hardware, so
 // it's safe for validating env vars / CLI input cheaply.
 func ValidateIdentity(s string) error {
-	if _, _, err := plugin.ParseIdentity(s); err == nil {
+	if name, _, err := plugin.ParseIdentity(s); err == nil {
+		if !pluginAllowed(name) {
+			return errors.Newf("age plugin %q is not allowed (set SHH_ALLOWED_AGE_PLUGINS to permit it)", name)
+		}
 		return nil
 	}
 	if _, err := age.ParseX25519Identity(s); err == nil {
