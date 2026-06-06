@@ -74,6 +74,12 @@ func cmdRun(file string, args []string) error {
 		return errors.New("no command specified (usage: shh run -- <command> [args...])")
 	}
 
+	// No file given (e.g. `shh run -- cmd`): fall back to the default .env.enc,
+	// matching list/env/get/shell rather than trying to open an empty path.
+	if file == "" {
+		file = envutil.FindEncFile()
+	}
+
 	privKey, err := keyring.GetKey()
 	if err != nil {
 		return err

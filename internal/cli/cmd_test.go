@@ -67,6 +67,21 @@ func TestCmdRun_SetsEnvVars(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// Like `shh list`/`env`/`get`, `shh run` with no file argument should fall
+// back to the default .env.enc (resolved via envutil.FindEncFile), rather
+// than trying to open an empty path. printenv exits non-zero if the secret
+// is missing, so NoError proves both the default resolved and the secret
+// was injected.
+func TestCmdRun_DefaultsToEnvEncWhenNoFile(t *testing.T) {
+	useTempDir(t)
+	privKey, pubKey := generateTestKey(t)
+	setTestAgeKey(t, privKey)
+	setupEncryptedFile(t, ".env.enc", map[string]string{"MY_SECRET": "s3cret_value"}, pubKey)
+
+	err := cmdRun("", []string{"printenv", "MY_SECRET"})
+	assert.NoError(t, err)
+}
+
 func TestCmdRun_FiltersShhAgeKey(t *testing.T) {
 	useTempDir(t)
 	privKey, pubKey := generateTestKey(t)
