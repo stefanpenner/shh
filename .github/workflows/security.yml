@@ -30,8 +30,11 @@ jobs:
       - name: Run scans
         id: report
         run: |
+          # Random delimiter so tool output can't forge the heredoc terminator
+          # and inject arbitrary step outputs.
+          delim="SCAN_EOF_$(openssl rand -hex 16)"
           {
-            echo 'SCAN_REPORT<<SCAN_EOF'
+            echo "SCAN_REPORT<<${delim}"
 
             echo '## govulncheck'
             govulncheck ./... 2>&1 || true
@@ -44,7 +47,7 @@ jobs:
             echo '## staticcheck'
             staticcheck ./... 2>&1 || true
 
-            echo 'SCAN_EOF'
+            echo "${delim}"
           } >> "$GITHUB_OUTPUT"
 
   ai-security-review:
@@ -65,9 +68,17 @@ jobs:
           cache: true
 
       - name: Build prompt with scan results
+        env:
+          # Pass the scan report via the environment, never interpolated into
+          # the shell. Interpolating ${{ ... }} directly into the script let
+          # report content break the quoting and the heredoc delimiter.
+          SCAN_REPORT: ${{ needs.scan.outputs.report }}
         run: |
+          # Random delimiter so report content can't forge the terminator and
+          # inject arbitrary environment variables into $GITHUB_ENV.
+          delim="SECURITY_PROMPT_EOF_$(openssl rand -hex 16)"
           {
-            echo 'SECURITY_PROMPT<<EOF'
+            echo "SECURITY_PROMPT<<${delim}"
             cat .github/security-review-prompt.md
             echo ''
             echo '## Static analysis results'
@@ -77,9 +88,9 @@ jobs:
             echo 'with justifications for false positives. Include all fixes in your PR.'
             echo ''
             echo '```'
-            echo '${{ needs.scan.outputs.report }}'
+            printf '%s\n' "$SCAN_REPORT"
             echo '```'
-            echo 'EOF'
+            echo "${delim}"
           } >> "$GITHUB_ENV"
 
       - name: AI adversarial security review
