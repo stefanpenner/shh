@@ -179,6 +179,30 @@ func newRootCmd() *cobra.Command {
 	rmCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
 	rootCmd.AddCommand(rmCmd)
 
+	// get command
+	getCmd := &cobra.Command{
+		Use:   "get <KEY> [file]",
+		Short: "Print a single secret value",
+		Args:  cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env, _ := cmd.Flags().GetString("env")
+			quiet, _ := cmd.Flags().GetBool("quiet")
+			file, err := envutil.ResolveFileE(env, nil)
+			if err != nil {
+				return err
+			}
+			if len(args) > 1 {
+				file = args[1]
+			}
+			return cmdGet(file, args[0], os.Stderr, func() bool {
+				return term.IsTerminal(int(os.Stdout.Fd())) // #nosec G115 -- file descriptors always fit in int
+			}, quiet)
+		},
+	}
+	getCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
+	getCmd.Flags().BoolP("quiet", "q", false, "Suppress non-TTY warning")
+	rootCmd.AddCommand(getCmd)
+
 	// shell command
 	shellCmd := &cobra.Command{
 		Use:     "shell [file]",
