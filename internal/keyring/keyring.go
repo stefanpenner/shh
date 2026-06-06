@@ -15,8 +15,9 @@ const keychainService = "shh-age-key"
 func GetKey() (string, error) {
 	if key := os.Getenv("SHH_AGE_KEY"); key != "" {
 		// Validate eagerly so callers get a clear error rather than a cryptic
-		// failure deep in the encryption stack.
-		if _, err := crypto.PublicKeyFrom(key); err != nil {
+		// failure deep in the encryption stack. Encoding-only — a plugin identity
+		// (YubiKey/Secure Enclave) is valid here without touching the hardware.
+		if err := crypto.ValidateIdentity(key); err != nil {
 			return "", errors.New("SHH_AGE_KEY is not a valid age private key")
 		}
 		return key, nil
