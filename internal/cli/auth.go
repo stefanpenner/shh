@@ -3,11 +3,15 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
+	"syscall"
 
 	"filippo.io/age"
 	"github.com/cockroachdb/errors"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
+	"github.com/stefanpenner/shh/internal/crypto"
 	"github.com/stefanpenner/shh/internal/envutil"
 	"github.com/stefanpenner/shh/internal/github"
 	"github.com/stefanpenner/shh/internal/keyring"
@@ -16,6 +20,103 @@ import (
 
 func requireGHUsername() (string, error) {
 	return github.RequireUsername()
+}
+
+// readSecret prompts on stderr and reads a line without echo. Overridable in
+// tests. Kept off stdout so piped secrets stay clean.
+var readSecret = func(prompt string) (string, error) {
+	fmt.Fprint(os.Stderr, prompt)
+	b, err := term.ReadPassword(int(syscall.Stdin))
+	fmt.Fprintln(os.Stderr)
+	return string(b), err
+}
+
+// readNewPassphrase prompts twice and confirms — a brain key is unrecoverable if
+// you fat-finger it, so we never set one from a single unconfirmed entry.
+func readNewPassphrase() (string, error) {
+	p1, err := readSecret("New passphrase: ")
+	if err != nil {
+		return "", err
+	}
+	p2, err := readSecret("Confirm passphrase: ")
+	if err != nil {
+		return "", err
+	}
+	if p1 != p2 {
+		return "", errors.New("passphrases do not match")
+	}
+	if strings.TrimSpace(p1) == "" {
+		return "", errors.New("empty passphrase")
+	}
+	return p1, nil
+}
+
+// passphraseRecipient prompts for a new passphrase and returns the recipient
+// (age1…) of the key it derives, for `users add --passphrase`.
+func passphraseRecipient() (string, error) {
+	fmt.Fprintln(os.Stderr, hintStyle.Render("Use a GENERATED high-entropy passphrase (e.g. 8 diceware words)."))
+	fmt.Fprintln(os.Stderr, hintStyle.Render(".env.enc is committed, so a weak phrase can be brute-forced offline."))
+	phrase, err := readNewPassphrase()
+	if err != nil {
+		return "", err
+	}
+	id, err := crypto.IdentityFromPassphrase(phrase)
+	if err != nil {
+		return "", err
+	}
+	return id.Recipient().String(), nil
+}
+
+// runLoginPassphrase derives an age key from a passphrase and stores it in the
+// keyring. The passphrase is never persisted or echoed — recovery re-derives it.
+func runLoginPassphrase() error {
+	phrase, err := readSecret("Passphrase: ")
+	if err != nil {
+		return err
+	}
+	id, err := crypto.IdentityFromPassphrase(phrase)
+	if err != nil {
+		return err
+	}
+	return runLoginIdentity(id.String())
+}
+
+// runLoginIdentity stores a caller-supplied age identity in the OS keyring. The
+// argument is either an identity string (AGE-SECRET-KEY-… or AGE-PLUGIN-…) or a
+// path to an age identity file (as produced by `age-plugin-yubikey -i` /
+// `age-plugin-se keygen`). This is how a non-extractable hardware key (YubiKey,
+// Secure Enclave) is enrolled — its identity is a stub pointer, not a secret.
+func runLoginIdentity(arg string) error {
+	identity := strings.TrimSpace(arg)
+	if data, err := os.ReadFile(arg); err == nil { // #nosec G304 -- user-supplied identity file
+		identity = extractIdentity(string(data))
+	}
+	if err := crypto.ValidateIdentity(identity); err != nil {
+		return errors.Wrap(err, "not a valid age identity")
+	}
+	if err := keyring.StoreKey(identity); err != nil {
+		return errors.Wrap(err, "keyring store")
+	}
+	fmt.Println(successStyle.Render("Identity stored in OS keyring."))
+	if pub, err := keyring.PublicKeyFrom(identity); err == nil {
+		fmt.Printf("  key: %s\n", keyStyle.Render(pub))
+	} else {
+		fmt.Println(hintStyle.Render("Hardware/plugin key — add its recipient with: shh users add --name <name> --key age1…"))
+	}
+	return nil
+}
+
+// extractIdentity returns the first non-comment, non-blank line of an age
+// identity file (the AGE-SECRET-KEY-… / AGE-PLUGIN-… line).
+func extractIdentity(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		return line
+	}
+	return strings.TrimSpace(content)
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
@@ -129,7 +230,10 @@ func cmdWhoami() error {
 	}
 	pubKey, err := keyring.PublicKeyFrom(privKey)
 	if err != nil {
-		return err
+		// Plugin identity (YubiKey/Secure Enclave): the recipient isn't derivable
+		// from the identity, and the SSH/X25519 matching below doesn't apply.
+		fmt.Println(hintStyle.Render("  key: hardware/plugin identity (recipient not derivable)"))
+		return nil
 	}
 
 	fmt.Printf("  key: %s\n", keyStyle.Render(pubKey))

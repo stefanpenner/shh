@@ -10,9 +10,9 @@ import (
 )
 
 func WrapDataKeyForRecipient(dataKey []byte, pubKey string) (string, error) {
-	rec, err := age.ParseX25519Recipient(pubKey)
+	rec, err := ParseRecipient(pubKey)
 	if err != nil {
-		return "", errors.Wrapf(err, "parse recipient %s", pubKey)
+		return "", err
 	}
 	var buf bytes.Buffer
 	w, err := age.Encrypt(&buf, rec)
@@ -45,9 +45,9 @@ func UnwrapDataKey(wrapped string, privateKey string) ([]byte, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "base64 decode data key")
 	}
-	identity, err := age.ParseX25519Identity(privateKey)
+	identity, err := ParseIdentity(privateKey)
 	if err != nil {
-		return nil, errors.Wrap(err, "parse age identity")
+		return nil, err
 	}
 	r, err := age.Decrypt(bytes.NewReader(data), identity)
 	if err != nil {

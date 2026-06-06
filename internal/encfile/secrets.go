@@ -56,20 +56,38 @@ func EncryptSecrets(secrets map[string]string, recipients map[string]string) (*E
 	}, nil
 }
 
-// DecryptSecrets decrypts the secrets in an EncryptedFile using the provided private key.
-func DecryptSecrets(ef *EncryptedFile, privateKey string) (map[string]string, error) {
-	pubKey, err := publicKeyFrom(privateKey)
-	if err != nil {
-		return nil, err
-	}
-	var myRecipientName string
-	for name, pk := range ef.Recipients {
-		if pk == pubKey {
-			myRecipientName = name
-			break
+// resolveDataKey unwraps the file's data key with the given identity.
+//
+// Fast path: derive the identity's recipient and unwrap that recipient's entry
+// directly (one unwrap → at most one hardware touch). Fallback: when the
+// recipient can't be derived from the identity — which is the case for plugin
+// identities (YubiKey, Secure Enclave), where age returns only a placeholder —
+// try each wrapped key in turn. A plugin rejects stanzas that aren't for it
+// without prompting, so only the matching entry triggers a touch.
+func resolveDataKey(ef *EncryptedFile, privateKey string) ([]byte, error) {
+	if ef.Version == 1 {
+		dataKey, err := crypto.UnwrapDataKey(ef.DataKey, privateKey)
+		if err != nil {
+			return nil, errors.Wrap(err, "decrypt data key")
 		}
+		return dataKey, nil
 	}
-	if myRecipientName == "" {
+
+	if pubKey, err := publicKeyFrom(privateKey); err == nil {
+		// Recipient is derivable (X25519): look the entry up by name.
+		for name, pk := range ef.Recipients {
+			if pk == pubKey {
+				wrappedKey, ok := ef.WrappedKeys[name]
+				if !ok {
+					return nil, errors.Newf("no wrapped key found for recipient %s", name)
+				}
+				dataKey, err := crypto.UnwrapDataKey(wrappedKey, privateKey)
+				if err != nil {
+					return nil, errors.Wrap(err, "decrypt data key")
+				}
+				return dataKey, nil
+			}
+		}
 		names := make([]string, 0, len(ef.Recipients))
 		for name := range ef.Recipients {
 			names = append(names, name)
@@ -79,24 +97,25 @@ func DecryptSecrets(ef *EncryptedFile, privateKey string) (map[string]string, er
 			pubKey, strings.Join(names, ", "))
 	}
 
-	var dataKey []byte
+	// Plugin identity: recipient not derivable — trial-unwrap each entry.
+	wrappedNames := make([]string, 0, len(ef.WrappedKeys))
+	for name := range ef.WrappedKeys {
+		wrappedNames = append(wrappedNames, name)
+	}
+	sort.Strings(wrappedNames)
+	for _, name := range wrappedNames {
+		if dataKey, err := crypto.UnwrapDataKey(ef.WrappedKeys[name], privateKey); err == nil {
+			return dataKey, nil
+		}
+	}
+	return nil, errors.New("your key is not in the recipients list (no wrapped key could be unwrapped)")
+}
 
-	if ef.Version == 1 {
-		// v1: single wrapped data key
-		dataKey, err = crypto.UnwrapDataKey(ef.DataKey, privateKey)
-		if err != nil {
-			return nil, errors.Wrap(err, "decrypt data key")
-		}
-	} else {
-		// v2: per-recipient wrapped keys
-		wrappedKey, ok := ef.WrappedKeys[myRecipientName]
-		if !ok {
-			return nil, errors.Newf("no wrapped key found for recipient %s", myRecipientName)
-		}
-		dataKey, err = crypto.UnwrapDataKey(wrappedKey, privateKey)
-		if err != nil {
-			return nil, errors.Wrap(err, "decrypt data key")
-		}
+// DecryptSecrets decrypts the secrets in an EncryptedFile using the provided private key.
+func DecryptSecrets(ef *EncryptedFile, privateKey string) (map[string]string, error) {
+	dataKey, err := resolveDataKey(ef, privateKey)
+	if err != nil {
+		return nil, err
 	}
 
 	// Verify MAC
@@ -118,34 +137,12 @@ func DecryptSecrets(ef *EncryptedFile, privateKey string) (map[string]string, er
 
 // ReWrapDataKey re-wraps the data key for a new set of recipients using the provided private key.
 func ReWrapDataKey(ef *EncryptedFile, newRecipients map[string]string, privateKey string) error {
-	pubKey, err := publicKeyFrom(privateKey)
+	// Unwrap with the current identity — handles X25519 and plugin identities
+	// (YubiKey/Secure Enclave) alike, so you can add/remove users while
+	// authenticated with a hardware key.
+	dataKey, err := resolveDataKey(ef, privateKey)
 	if err != nil {
 		return err
-	}
-
-	// Find our wrapped key (works for both v1 and v2)
-	var dataKey []byte
-	if ef.Version == 1 {
-		dataKey, err = crypto.UnwrapDataKey(ef.DataKey, privateKey)
-	} else {
-		var myName string
-		for name, pk := range ef.Recipients {
-			if pk == pubKey {
-				myName = name
-				break
-			}
-		}
-		if myName == "" {
-			return errors.New("your key is not in the recipients list")
-		}
-		wrappedKey, ok := ef.WrappedKeys[myName]
-		if !ok {
-			return errors.Newf("no wrapped key found for recipient %s", myName)
-		}
-		dataKey, err = crypto.UnwrapDataKey(wrappedKey, privateKey)
-	}
-	if err != nil {
-		return errors.Wrap(err, "decrypt data key")
 	}
 
 	// Verify MAC before trusting and re-wrapping the data key.
