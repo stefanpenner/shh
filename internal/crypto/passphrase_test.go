@@ -27,6 +27,16 @@ func TestIdentityFromPassphraseDiffers(t *testing.T) {
 	require.NotEqual(t, a.String(), b.String(), "different passphrase → different identity")
 }
 
+// Surrounding whitespace must not change the derived key, or a stray space at
+// enrollment permanently locks the user out of a nothing-stored failsafe.
+func TestIdentityFromPassphraseTrimsWhitespace(t *testing.T) {
+	clean, err := crypto.IdentityFromPassphrase(testPhrase)
+	require.NoError(t, err)
+	padded, err := crypto.IdentityFromPassphrase("  " + testPhrase + "\n\t ")
+	require.NoError(t, err)
+	require.Equal(t, clean.String(), padded.String(), "whitespace must be trimmed before the KDF")
+}
+
 func TestIdentityFromPassphraseRejectsEmpty(t *testing.T) {
 	_, err := crypto.IdentityFromPassphrase("")
 	require.Error(t, err)

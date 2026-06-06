@@ -30,7 +30,11 @@ const (
 // normal age1… string and its identity is AGE-SECRET-KEY-1…, so the rest of shh
 // (recipients map, wrapping, decryption) treats it like any other key.
 func IdentityFromPassphrase(passphrase string) (*age.X25519Identity, error) {
-	if strings.TrimSpace(passphrase) == "" {
+	// Trim once, before the KDF, so a stray leading/trailing space at enrollment
+	// can't derive a different key than a clean login types — a permanent lockout
+	// for a nothing-stored failsafe.
+	passphrase = strings.TrimSpace(passphrase)
+	if passphrase == "" {
 		return nil, errors.New("empty passphrase")
 	}
 	// The salt is the fixed public label itself (argon2 only needs >= 8 bytes).

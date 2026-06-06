@@ -33,6 +33,11 @@ var readSecret = func(prompt string) (string, error) {
 
 // readNewPassphrase prompts twice and confirms — a brain key is unrecoverable if
 // you fat-finger it, so we never set one from a single unconfirmed entry.
+// minPassphraseLen is a coarse weak-phrase floor at enrollment. .env.enc is
+// committed and brute-forceable offline, so we reject obviously-weak inputs.
+// (Login does not enforce it — an existing key must always remain unlockable.)
+const minPassphraseLen = 12
+
 func readNewPassphrase() (string, error) {
 	p1, err := readSecret("New passphrase: ")
 	if err != nil {
@@ -42,11 +47,17 @@ func readNewPassphrase() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Trim before compare/length so enrollment matches what IdentityFromPassphrase
+	// derives (which also trims).
+	p1, p2 = strings.TrimSpace(p1), strings.TrimSpace(p2)
 	if p1 != p2 {
 		return "", errors.New("passphrases do not match")
 	}
-	if strings.TrimSpace(p1) == "" {
+	if p1 == "" {
 		return "", errors.New("empty passphrase")
+	}
+	if len(p1) < minPassphraseLen {
+		return "", errors.Newf("passphrase too short (%d chars, need >= %d) — use a generated high-entropy passphrase (e.g. 8 diceware words)", len(p1), minPassphraseLen)
 	}
 	return p1, nil
 }
