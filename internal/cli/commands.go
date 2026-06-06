@@ -313,3 +313,23 @@ func cmdRm(file, key string) error {
 	fmt.Println(successStyle.Render(fmt.Sprintf("Removed %s from %s.", key, file)))
 	return nil
 }
+
+func cmdGet(file, key string, stderr io.Writer, checkTTY func() bool, quiet bool) error {
+	privKey, err := keyring.GetKey()
+	if err != nil {
+		return err
+	}
+	secrets, err := encfile.LoadSecrets(file, privKey)
+	if err != nil {
+		return err
+	}
+	value, ok := secrets[key]
+	if !ok {
+		return errors.Newf("key %q not found in %s", key, file)
+	}
+	if !quiet && !checkTTY() {
+		fmt.Fprintln(stderr, "warning: writing secret to stdout (not a terminal)")
+	}
+	fmt.Println(value)
+	return nil
+}
