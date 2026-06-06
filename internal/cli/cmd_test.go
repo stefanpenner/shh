@@ -139,52 +139,48 @@ func TestParseRunArgs(t *testing.T) {
 
 // --- Env command tests ---
 
-func TestCmdEnv_WarnsWhenNotTTY(t *testing.T) {
+func TestCmdEnv_RefusesWithoutStdoutFlag(t *testing.T) {
 	useTempDir(t)
 	privKey, pubKey := generateTestKey(t)
 	setTestAgeKey(t, privKey)
+	setupEncryptedFile(t, ".env.enc", map[string]string{"SECRET": "hello"}, pubKey)
 
-	secrets := map[string]string{"SECRET": "hello"}
-	ef, err := encfile.EncryptSecrets(secrets, map[string]string{"testuser": pubKey})
-	require.NoError(t, err)
-	require.NoError(t, encfile.Save(".env.enc", ef))
-
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
 	var stderr bytes.Buffer
-	err = cmdEnv(".env.enc", &stderr, func() bool { return false }, false)
-	require.NoError(t, err)
-	assert.Contains(t, stderr.String(), "warning:")
+	err := cmdEnv(".env.enc", false, &stderr)
+	w.Close()
+	os.Stdout = oldStdout
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--stdout")
+
+	// Nothing should have been written to stdout.
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+	assert.Empty(t, buf.String())
 }
 
-func TestCmdEnv_NoWarningWhenTTY(t *testing.T) {
+func TestCmdEnv_PrintsWithStdoutFlag(t *testing.T) {
 	useTempDir(t)
 	privKey, pubKey := generateTestKey(t)
 	setTestAgeKey(t, privKey)
+	setupEncryptedFile(t, ".env.enc", map[string]string{"SECRET": "hello"}, pubKey)
 
-	secrets := map[string]string{"SECRET": "hello"}
-	ef, err := encfile.EncryptSecrets(secrets, map[string]string{"testuser": pubKey})
-	require.NoError(t, err)
-	require.NoError(t, encfile.Save(".env.enc", ef))
-
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
 	var stderr bytes.Buffer
-	err = cmdEnv(".env.enc", &stderr, func() bool { return true }, false)
+	err := cmdEnv(".env.enc", true, &stderr)
+	w.Close()
+	os.Stdout = oldStdout
+
 	require.NoError(t, err)
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+	assert.Equal(t, "export SECRET='hello'\n", buf.String())
 	assert.Empty(t, stderr.String())
-}
-
-func TestCmdEnv_QuietSuppressesWarning(t *testing.T) {
-	useTempDir(t)
-	privKey, pubKey := generateTestKey(t)
-	setTestAgeKey(t, privKey)
-
-	secrets := map[string]string{"SECRET": "hello"}
-	ef, err := encfile.EncryptSecrets(secrets, map[string]string{"testuser": pubKey})
-	require.NoError(t, err)
-	require.NoError(t, encfile.Save(".env.enc", ef))
-
-	var stderr2 bytes.Buffer
-	err = cmdEnv(".env.enc", &stderr2, func() bool { return false }, true)
-	require.NoError(t, err)
-	assert.Empty(t, stderr2.String())
 }
 
 // --- Get command tests ---

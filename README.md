@@ -40,7 +40,7 @@ shh get KEY                           # print a single secret value
 shh rm KEY                            # remove a secret
 shh edit                              # edit all secrets in $EDITOR
 shh list                              # list secret names
-shh env                               # print export statements
+shh env --stdout                      # print export statements (requires --stdout)
 shh shell                             # open a shell with secrets loaded
 shh run -- <cmd> [args...]            # run a command with secrets injected
 shh template <file>                   # render a template with secrets substituted
@@ -105,7 +105,7 @@ Then in your CI pipeline or Dockerfile:
 ```bash
 shh run -- node app.js            # secrets injected, SHH_AGE_KEY auto-filtered
 # or
-eval $(shh env -q)                # export secrets into the current shell
+eval $(shh env --stdout)          # export secrets into the current shell
 ```
 
 You manage **one** platform secret (`SHH_AGE_KEY`); everything else lives in `.env.enc`.
