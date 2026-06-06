@@ -1,6 +1,6 @@
 module github.com/stefanpenner/shh
 
-go 1.24.0
+go 1.25.0
 
 require (
 	filippo.io/age v1.3.1
@@ -11,8 +11,8 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	github.com/zalando/go-keyring v0.2.6
-	golang.org/x/crypto v0.48.0
-	golang.org/x/term v0.40.0
+	golang.org/x/crypto v0.52.0
+	golang.org/x/term v0.43.0
 )
 
 require (
@@ -45,7 +45,7 @@ require (
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/sys v0.41.0 // indirect
-	golang.org/x/text v0.34.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
