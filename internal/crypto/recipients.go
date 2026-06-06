@@ -3,11 +3,41 @@ package crypto
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"filippo.io/age"
 	"filippo.io/age/plugin"
 	"github.com/cockroachdb/errors"
 )
+
+// Plugin recipients cause age to exec age-plugin-<name> from PATH. Recipients
+// are read from the committed (attacker-modifiable) .env.enc, so an unknown
+// <name> is a code-execution vector. We only honor an allowlist of plugins shh
+// actually supports; extend it explicitly via SHH_ALLOWED_AGE_PLUGINS (comma-
+// separated) for other trusted plugins (e.g. tpm, fido).
+func allowedPlugins() map[string]bool {
+	allowed := map[string]bool{"yubikey": true, "se": true}
+	for _, name := range strings.Split(os.Getenv("SHH_ALLOWED_AGE_PLUGINS"), ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			allowed[name] = true
+		}
+	}
+	return allowed
+}
+
+func pluginAllowed(name string) bool { return allowedPlugins()[name] }
+
+// EnsureRecipientAllowed errors only when s is a well-formed plugin recipient for
+// a plugin that is not on the allowlist. Malformed or X25519 recipients pass —
+// they fail safely downstream / are caught by the MAC. This narrow gate exists
+// solely to stop a disallowed plugin name (from an untrusted file) reaching age's
+// plugin exec; use it at load time without rejecting otherwise-handled inputs.
+func EnsureRecipientAllowed(s string) error {
+	if name, _, err := plugin.ParseRecipient(s); err == nil && !pluginAllowed(name) {
+		return errors.Newf("age plugin %q is not allowed (set SHH_ALLOWED_AGE_PLUGINS to permit it)", name)
+	}
+	return nil
+}
 
 // This file teaches shh's age layer to speak the age *plugin* protocol in
 // addition to native X25519 keys, so a recipient/identity can be backed by
@@ -33,7 +63,11 @@ func pluginUI() *plugin.ClientUI {
 // requires its plugin binary to be installed (but not the hardware — encrypting
 // to a recipient is public-key only).
 func ParseRecipient(s string) (age.Recipient, error) {
-	if _, _, err := plugin.ParseRecipient(s); err == nil {
+	if name, _, err := plugin.ParseRecipient(s); err == nil {
+		// Allowlist check BEFORE NewRecipient, which would exec age-plugin-<name>.
+		if !pluginAllowed(name) {
+			return nil, errors.Newf("recipient uses age plugin %q, which is not allowed (set SHH_ALLOWED_AGE_PLUGINS to permit it)", name)
+		}
 		r, err := plugin.NewRecipient(s, pluginUI())
 		if err != nil {
 			return nil, errors.Wrapf(err, "plugin recipient %s", s)
@@ -69,7 +103,10 @@ func ParseIdentity(s string) (age.Identity, error) {
 // ValidateRecipient reports whether s is a well-formed age recipient (plugin or
 // X25519). Encoding-only: it does not run a plugin binary.
 func ValidateRecipient(s string) error {
-	if _, _, err := plugin.ParseRecipient(s); err == nil {
+	if name, _, err := plugin.ParseRecipient(s); err == nil {
+		if !pluginAllowed(name) {
+			return errors.Newf("age plugin %q is not allowed (set SHH_ALLOWED_AGE_PLUGINS to permit it)", name)
+		}
 		return nil
 	}
 	if _, err := age.ParseX25519Recipient(s); err == nil {

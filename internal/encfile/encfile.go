@@ -9,13 +9,14 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/cockroachdb/errors"
 
+	"github.com/stefanpenner/shh/internal/crypto"
 	"github.com/stefanpenner/shh/internal/envutil"
 )
 
 type EncryptedFile struct {
 	Version     int               `toml:"version"`
 	MAC         string            `toml:"mac"`
-	DataKey     string            `toml:"data_key,omitempty"`     // v1 only, kept for migration
+	DataKey     string            `toml:"data_key,omitempty"` // v1 only, kept for migration
 	Recipients  map[string]string `toml:"recipients"`
 	WrappedKeys map[string]string `toml:"wrapped_keys,omitempty"` // v2: per-recipient wrapped data keys
 	Secrets     map[string]string `toml:"secrets"`
@@ -49,6 +50,15 @@ func normalize(ef *EncryptedFile) (*EncryptedFile, error) {
 	}
 	if ef.Secrets == nil {
 		ef.Secrets = make(map[string]string)
+	}
+	// Fail closed on a recipient backed by a disallowed age plugin: this file is
+	// attacker-modifiable, and a disallowed plugin name would otherwise reach
+	// age's plugin exec. Malformed/X25519 recipients are left to the MAC and the
+	// normal parse paths (so we don't break tamper-detection or placeholders).
+	for name, rec := range ef.Recipients {
+		if err := crypto.EnsureRecipientAllowed(rec); err != nil {
+			return nil, errors.Wrapf(err, "recipient %q", name)
+		}
 	}
 	return ef, nil
 }

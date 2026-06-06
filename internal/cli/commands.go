@@ -51,9 +51,15 @@ func cmdEncrypt(src string) error {
 		return err
 	}
 
-	// If .env.enc already exists, preserve its recipients
+	// If .env.enc already exists, preserve its recipients — but only after
+	// authenticating it. Without this, a tampered .env.enc could redirect the new
+	// secrets to an attacker's recipient (and previously reached age's plugin
+	// exec with no MAC check at all).
 	dest := src + ".enc"
 	if existing, err := loadEncryptedFile(dest); err == nil {
+		if _, derr := encfile.DecryptSecrets(existing, privKey); derr != nil {
+			return errors.Wrap(derr, "refusing to reuse recipients from an unverifiable .env.enc")
+		}
 		recipients = existing.Recipients
 	}
 
