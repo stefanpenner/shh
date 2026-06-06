@@ -94,22 +94,20 @@ func newRootCmd() *cobra.Command {
 	// env command
 	envCmd := &cobra.Command{
 		Use:   "env [file]",
-		Short: "Print secrets as export statements",
+		Short: "Print secrets as export statements (requires --stdout)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, _ := cmd.Flags().GetString("env")
-			quiet, _ := cmd.Flags().GetBool("quiet")
+			stdout, _ := cmd.Flags().GetBool("stdout")
 			file, err := envutil.ResolveFileE(env, args)
 			if err != nil {
 				return err
 			}
-			return cmdEnv(file, os.Stderr, func() bool {
-				return term.IsTerminal(int(os.Stdout.Fd())) // #nosec G115 -- file descriptors always fit in int
-			}, quiet)
+			return cmdEnv(file, stdout, os.Stderr)
 		},
 	}
 	envCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
-	envCmd.Flags().BoolP("quiet", "q", false, "Suppress non-TTY warning")
+	envCmd.Flags().Bool("stdout", false, "Write secrets to stdout (required; secrets are not printed without it)")
 	rootCmd.AddCommand(envCmd)
 
 	// edit command
