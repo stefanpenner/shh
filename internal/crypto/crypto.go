@@ -12,6 +12,12 @@ import (
 )
 
 func PublicKeyFrom(privateKey string) (string, error) {
+	// A plugin identity (YubiKey/Secure Enclave) cannot derive its recipient
+	// locally — age returns a placeholder — so callers must register the
+	// recipient explicitly. Surface that instead of a misleading value.
+	if IsPluginIdentity(privateKey) {
+		return "", errors.New("cannot derive a recipient from a plugin identity; add its recipient with 'shh users add --key age1…'")
+	}
 	identity, err := age.ParseX25519Identity(privateKey)
 	if err != nil {
 		return "", errors.Wrap(err, "parse age identity")

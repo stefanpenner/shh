@@ -116,12 +116,86 @@ If you already have an age public key, pass it directly:
 shh users add --name staging --key age1xyzt...
 ```
 
+## Hardware keys (YubiKey & Secure Enclave)
+
+`shh` supports [age plugin](https://github.com/FiloSottile/awesome-age#plugins)
+recipients, so a key can be backed by hardware whose private key **can never be
+extracted** — a YubiKey or Apple's Secure Enclave — instead of a copyable secret
+string.
+
+```bash
+# YubiKey (private key lives on the device; decrypt needs a touch)
+brew install age-plugin-yubikey
+age-plugin-yubikey --generate                       # prints age1yubikey1… + an identity file
+shh users add --name stef-yubikey --key age1yubikey1…
+shh login --identity ~/age-yubikey-identity.txt     # store the identity stub in your keyring
+
+# Apple Secure Enclave (built into the Mac; decrypt needs Touch ID)
+brew install age-plugin-se
+age-plugin-se keygen -o se-key.txt                  # recipient is in the file header
+shh users add --name stef-laptop --key "$(age-plugin-se recipients -i se-key.txt)"
+shh login --identity se-key.txt
+```
+
+Adding or re-wrapping for a plugin recipient needs the **plugin binary**
+installed (encryption is public-key only — no hardware required). **Decrypting**
+needs the **hardware itself** present (touch / PIN / biometric).
+
+## Passphrase ("brain") key
+
+A key derived from a passphrase — nothing to store, nothing to lose. The only
+recovery path that survives losing every device.
+
+```bash
+shh users add --name failsafe --passphrase   # prompts; adds a derived recipient
+shh login --passphrase                         # re-derive to unlock
+```
+
+- It's a normal age key (argon2id → X25519), so it shows as `[extractable]`.
+- `.env.enc` is committed, so it can be brute-forced offline → **use a generated
+  8-word passphrase**, and keep it complementary to a hardware key, not your only
+  failsafe.
+- Details + threat model: [`docs/passphrase-security.md`](docs/passphrase-security.md).
+
+### Extractable key, or non-extractable?
+
+| | **Extractable** (X25519 — the default) | **Non-extractable** (YubiKey / Secure Enclave) |
+|---|---|---|
+| The private key is… | a copyable string | sealed in hardware, never leaves it |
+| Back up / sync / recover | ✅ yes | ❌ no — can't be copied |
+| Use as a CI `SHH_AGE_KEY` | ✅ yes | ❌ no (needs the device) |
+| If the store/laptop is compromised | the key leaks | the key is safe |
+| Lost device | recover from your backup | **locked out** unless you enrolled a second key |
+
+- **CI / deploy keys → extractable.** No human, no hardware; the key must live as
+  a platform secret.
+- **Your everyday key → non-extractable.** Secure Enclave: free, and a stolen
+  laptop or leaked backup never exposes it.
+- **An offline root → a YubiKey in a safe.** Enroll **two** (each its own
+  recipient) — there's no recovery for hardware keys.
+- **Sync a key only if it's extractable**, and only in an end-to-end-encrypted
+  store. Syncing means accepting it's copyable — right for a *recovery* key, wrong
+  for one whose job is to be un-copyable.
+
+> **Retiring or losing an extractable key requires rotating your secrets.**
+> `shh users remove` re-wraps the data key for the *remaining* recipients, but the
+> removed key already saw every secret value and can still decrypt the **old**
+> `.env.enc` in git history. So whenever an extractable key is exposed or rotated
+> out, treat its secrets as compromised and **change the values** (`shh users
+> remove …`, then re-generate + `shh set` each affected secret). Hardware keys
+> never leak a copyable secret, so retiring one is just `shh users remove`.
+
+The recipient's **key encodes its type** (`age1…` extractable, `age1yubikey1…` /
+`age1se1…` hardware), and `shh users list` tags each one (`[extractable]`,
+`[yubikey]`, `[secure-enclave]`) so you can see which keys are in scope for the
+rotation rule above.
+
 ## How It Works
 
 `shh` uses **envelope encryption**: a random 32-byte AES-256 **data key** encrypts all secrets, and that data key is wrapped (age-encrypted) individually to each recipient.
 
 - **Adding a user** — re-wraps the existing data key for the new recipient. Secrets don't change.
-- **Removing a user** — generates a new data key, re-encrypts all secrets, wraps only for remaining recipients. The old key becomes useless.
+- **Removing a user** — generates a new data key, re-encrypts all secrets, wraps only for remaining recipients. The removed key can't read *new* versions — but it already saw the current values and can still decrypt the old `.env.enc` in git history, so if it was an extractable key, rotate the secret values too.
 
 Private keys stay in your OS keyring (macOS Keychain, GNOME/KDE Secret Service, Windows Credential Manager). Set `SHH_AGE_KEY` to override for CI/Docker. Set `SHH_PLAINTEXT` to point at a plain `.env` file to skip decryption entirely.
 
