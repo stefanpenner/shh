@@ -40,11 +40,22 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(initCmd)
 
 	// login command
-	rootCmd.AddCommand(&cobra.Command{
+	loginCmd := &cobra.Command{
 		Use:   "login",
-		Short: "Log in (auto-detects SSH key via GitHub)",
-		RunE:  runLogin,
-	})
+		Short: "Log in (auto-detects SSH key via GitHub, or --identity / --passphrase)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if pass, _ := cmd.Flags().GetBool("passphrase"); pass {
+				return runLoginPassphrase()
+			}
+			if id, _ := cmd.Flags().GetString("identity"); id != "" {
+				return runLoginIdentity(id)
+			}
+			return runLogin(cmd, args)
+		},
+	}
+	loginCmd.Flags().String("identity", "", "Enroll a provided age identity: a file path or an AGE-SECRET-KEY-… / AGE-PLUGIN-… string (YubiKey, Secure Enclave)")
+	loginCmd.Flags().Bool("passphrase", false, "Derive your key from a passphrase (brain key); prompts, never stored")
+	rootCmd.AddCommand(loginCmd)
 
 	// whoami command
 	rootCmd.AddCommand(&cobra.Command{
@@ -281,11 +292,22 @@ func newRootCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name, _ := cmd.Flags().GetString("name")
 			key, _ := cmd.Flags().GetString("key")
+			if pass, _ := cmd.Flags().GetBool("passphrase"); pass {
+				if name == "" {
+					return errors.New("--passphrase requires --name (e.g. --name failsafe)")
+				}
+				k, err := passphraseRecipient()
+				if err != nil {
+					return err
+				}
+				key = k
+			}
 			return usersAddCmd(args, name, key)
 		},
 	}
 	addCmd.Flags().String("name", "", "Name for a non-GitHub recipient (e.g. production-deploy)")
 	addCmd.Flags().String("key", "", "Age public key (optional with --name; generated if omitted)")
+	addCmd.Flags().Bool("passphrase", false, "Derive the recipient from a passphrase (brain key); prompts for it")
 	usersCmd.AddCommand(addCmd)
 
 	usersCmd.AddCommand(&cobra.Command{

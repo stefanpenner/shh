@@ -8,6 +8,7 @@ import (
 	"filippo.io/age"
 	"github.com/cockroachdb/errors"
 
+	"github.com/stefanpenner/shh/internal/crypto"
 	"github.com/stefanpenner/shh/internal/encfile"
 	"github.com/stefanpenner/shh/internal/envutil"
 	"github.com/stefanpenner/shh/internal/github"
@@ -15,6 +16,21 @@ import (
 )
 
 const shhUserPrefix = "shh-user://"
+
+// recipientKindLabel renders the derived type of a recipient for `users list`.
+// "extractable" is the security-relevant one: those keys are copyable, so the
+// rotation-on-leak rule applies to them.
+func recipientKindLabel(pubKey string) string {
+	kind, extractable := crypto.RecipientKind(pubKey)
+	switch {
+	case extractable:
+		return "extractable"
+	case kind == "se":
+		return "secure-enclave"
+	default:
+		return kind // yubikey, tpm, fido, …
+	}
+}
 
 func usersListCmd() error {
 	file := envutil.FindEncFile()
@@ -37,7 +53,8 @@ func usersListCmd() error {
 		if pubKey == myKey {
 			marker = " " + youStyle.Render("(you)")
 		}
-		fmt.Printf("  %d. %s  %s%s\n", i, keyStyle.Render(pubKey), nameStyle.Render(name), marker)
+		kind := hintStyle.Render("[" + recipientKindLabel(pubKey) + "]")
+		fmt.Printf("  %d. %s  %s %s%s\n", i, keyStyle.Render(pubKey), nameStyle.Render(name), kind, marker)
 	}
 	return nil
 }
@@ -53,8 +70,10 @@ func usersAddCmd(args []string, deployName, deployKey string) error {
 		}
 		name = shhUserPrefix + deployName
 		if deployKey != "" {
-			// User provided a key — parse it to validate the X25519 curve point, not just the format.
-			if _, err := age.ParseX25519Recipient(deployKey); err != nil {
+			// User provided a key — validate the encoding (X25519 or a plugin
+			// recipient such as a YubiKey/Secure Enclave key). Encoding-only, so
+			// no plugin binary or hardware is required just to add someone.
+			if err := crypto.ValidateRecipient(deployKey); err != nil {
 				return errors.Newf("invalid age public key %q: %v", deployKey, err)
 			}
 			newKey = deployKey
