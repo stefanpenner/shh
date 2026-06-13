@@ -19,8 +19,12 @@ var (
 		"PATH": true, "HOME": true, "SHELL": true, "USER": true, "LOGNAME": true,
 		// Linux dynamic-linker injection
 		"LD_PRELOAD": true, "LD_LIBRARY_PATH": true,
-		// macOS dynamic-linker injection
-		"DYLD_INSERT_LIBRARIES": true, "DYLD_LIBRARY_PATH": true, "DYLD_FRAMEWORK_PATH": true,
+		// macOS dynamic-linker injection (primary paths and fallback paths)
+		"DYLD_INSERT_LIBRARIES":        true,
+		"DYLD_LIBRARY_PATH":            true,
+		"DYLD_FRAMEWORK_PATH":          true,
+		"DYLD_FALLBACK_LIBRARY_PATH":   true, // macOS: fallback search path for shared libraries
+		"DYLD_FALLBACK_FRAMEWORK_PATH": true, // macOS: fallback search path for frameworks
 		// Shell startup files: bash sources BASH_ENV on non-interactive invocations;
 		// sh sources ENV. Storing these as secrets and injecting them into `shh shell`
 		// or `shh run` would execute arbitrary code at shell startup.
@@ -34,8 +38,8 @@ var (
 		// Zsh startup directory: overriding ZDOTDIR redirects zsh to source
 		// attacker-controlled startup files, equivalent to BASH_ENV for zsh.
 		"ZDOTDIR": true,
-		// Runtime-level code injection: these variables instruct language runtimes
-		// to load attacker-controlled code before any application logic runs.
+		// Runtime flag injection: these variables pass flags to language runtimes
+		// that cause them to load attacker-controlled code before application logic.
 		// A rogue recipient who can craft a valid .env.enc (with knowledge of the
 		// data key) could use these to achieve code execution via `shh run`.
 		"NODE_OPTIONS":        true, // Node.js: --require / --experimental-loader load arbitrary code
@@ -46,6 +50,18 @@ var (
 		"RUBYOPT":             true, // Ruby: -r flag loads an arbitrary file on startup
 		"PERL5OPT":            true, // Perl: -M flag loads an arbitrary module on startup
 		"DOTNET_STARTUP_HOOKS": true, // .NET: loads an arbitrary assembly before Main()
+		// Runtime path injection: these variables prepend attacker-controlled directories
+		// to the module/library search path, causing runtimes to load attacker code
+		// when the application imports any module that exists in the attacker's directory.
+		// This is the path-based counterpart to the flag-based injection vars above.
+		"PYTHONPATH": true, // Python: prepended to sys.path; imports attacker modules
+		"NODE_PATH":  true, // Node.js: searched by require() before node_modules
+		"RUBYLIB":    true, // Ruby: prepended to $LOAD_PATH; loaded before system libs
+		"PERLLIB":    true, // Perl: prepended to @INC; loaded before system libs
+		"PERL5LIB":   true, // Perl: same as PERLLIB (Perl 5 variant; takes precedence)
+		"CLASSPATH":  true, // Java: class search path; attacker classes loaded before JDK classes
+		"GEM_HOME":   true, // Ruby: directory where gems are installed and loaded from
+		"GEM_PATH":   true, // Ruby: colon-separated list of gem directories searched on require
 	}
 )
 
