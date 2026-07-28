@@ -1,152 +1,99 @@
 ----------------------------- MODULE RecoveryQR -----------------------------
 (***************************************************************************
-  Recovery QR lifecycle for shh (Ring 0).
+  Minimal recovery-QR core for shh (Ring 0).
 
-  Models the safety of paper/QR recovery:
-    - offline recovery secret is generated once
-    - EmitQR freezes that secret into a QR payload
-    - DecodeQR recovers the exact secret (fidelity)
-    - Login installs the secret into the keyring
-    - DecryptVault succeeds only when keyring is an authorized recipient
-    - Never remove the last recipient
-    - Daily key loss does not destroy recovery if QR still exists
+  Irreducible properties:
+    1. QR exists only after recovery is a vault recipient
+    2. Scan installs Recovery into the session
+    3. Session can use the vault only if it is a recipient
+    4. Vault never has zero recipients
 
-  This is a decision/state-machine core for recovery, not crypto math.
+  CLI mapping (one GenerateEmitQR ≈ users add --name recovery --qr):
+    LoseDaily     ≈ dead Mac / wiped keyring
+    ScanQR        ≈ login --qr-file  (paste SHH_AGE_KEY is the same abstract step)
+
+  Crypto / PNG codecs are out of scope — Go tests own fidelity of bits.
  ***************************************************************************)
 
-EXTENDS Naturals, Sequences, TLC
+EXTENDS TLC
 
-CONSTANTS
-  Daily,       \* daily Mac key identity token
-  Recovery,    \* recovery identity token
-  None         \* empty / absent
+CONSTANTS Daily, Recovery, None
 
 ASSUME Daily # Recovery /\ Daily # None /\ Recovery # None
 
 VARIABLES
-  recipients,     \* set of authorized identity tokens
-  recoverySecret, \* offline recovery secret (None until generated)
-  qrPayload,      \* payload written into QR (None or Recovery)
-  keyring,        \* currently logged-in identity (None, Daily, or Recovery)
-  vaultOpen       \* whether last decrypt succeeded
+  recipients,  \* authorized identities (non-empty subset of {Daily, Recovery})
+  qrReady,     \* TRUE once recovery secret has been frozen into a QR/paper payload
+  session      \* who is logged in: None | Daily | Recovery
 
-vars == <<recipients, recoverySecret, qrPayload, keyring, vaultOpen>>
+vars == <<recipients, qrReady, session>>
 
 TypeOK ==
   /\ recipients \subseteq {Daily, Recovery}
   /\ recipients # {}
-  /\ recoverySecret \in {None, Recovery}
-  /\ qrPayload \in {None, Recovery}
-  /\ keyring \in {None, Daily, Recovery}
-  /\ vaultOpen \in BOOLEAN
+  /\ qrReady \in BOOLEAN
+  /\ session \in {None, Daily, Recovery}
 
-----------------------------------------------------------------------------
-\* Safety: decrypt only if keyring is a current recipient
-DecryptOnlyIfRecipient ==
-  vaultOpen => keyring \in recipients
+\* --- Safety (the important things) ----------------------------------------
 
-\* Safety: QR never contains a secret that was not the recovery secret
-QROnlyRecovery ==
-  qrPayload # None => qrPayload = recoverySecret
+\* Never lock yourself out of the vault at the recipient layer
+AlwaysSomeRecipient == recipients # {}
 
-\* Safety: always at least one recipient
-AlwaysSomeRecipient ==
-  recipients # {}
+\* QR implies recovery was enrolled (can't print a recovery QR for nothing)
+QRImpliesRecipient == qrReady => Recovery \in recipients
 
-\* Round-trip: after emit+decode path, keyring can become Recovery
-\* (expressed operationally via actions; invariant that QR matches secret)
-QRFidelity ==
-  (qrPayload # None /\ recoverySecret # None) => qrPayload = recoverySecret
+\* Logged-in identity must be authorized to count as "can decrypt"
+\* (abstract: decrypt succeeds iff session \in recipients)
+SessionAuthorizedWhenPresent ==
+  session # None => session \in recipients
 
-----------------------------------------------------------------------------
+Inv ==
+  /\ TypeOK
+  /\ AlwaysSomeRecipient
+  /\ QRImpliesRecipient
+  /\ SessionAuthorizedWhenPresent
+
+\* --- Actions --------------------------------------------------------------
+
 Init ==
   /\ recipients = {Daily}
-  /\ recoverySecret = None
-  /\ qrPayload = None
-  /\ keyring = Daily
-  /\ vaultOpen = FALSE
+  /\ qrReady = FALSE
+  /\ session = Daily
 
-\* Generate a recovery identity (shh users add --name recovery)
-GenerateRecovery ==
-  /\ recoverySecret = None
-  /\ recoverySecret' = Recovery
+\* Mint recovery recipient and emit QR in one step (matches users add --qr).
+GenerateEmitQR ==
+  /\ Recovery \notin recipients
   /\ recipients' = recipients \cup {Recovery}
-  /\ UNCHANGED <<qrPayload, keyring, vaultOpen>>
+  /\ qrReady' = TRUE
+  /\ UNCHANGED session
 
-\* Emit QR of the recovery secret (shh users add --qr / paper card)
-EmitQR ==
-  /\ recoverySecret = Recovery
-  /\ qrPayload' = recoverySecret
-  /\ UNCHANGED <<recipients, recoverySecret, keyring, vaultOpen>>
+\* Dead Mac / cleared keyring
+LoseDaily ==
+  /\ session = Daily
+  /\ session' = None
+  /\ UNCHANGED <<recipients, qrReady>>
 
-\* Lose daily key (dead Mac / wiped keyring)
-LoseDailyKey ==
-  /\ keyring = Daily
-  /\ keyring' = None
-  /\ vaultOpen' = FALSE
-  /\ UNCHANGED <<recipients, recoverySecret, qrPayload>>
-
-\* Scan QR into keyring (shh login --qr-file)
-\* Fidelity: only Recovery payload accepted for recovery path
+\* Paper/QR/1Password recovery login
 ScanQR ==
-  /\ qrPayload = Recovery
-  /\ keyring' = qrPayload
-  /\ vaultOpen' = FALSE
-  /\ UNCHANGED <<recipients, recoverySecret, qrPayload>>
+  /\ qrReady
+  /\ Recovery \in recipients
+  /\ session' = Recovery
+  /\ UNCHANGED <<recipients, qrReady>>
 
-\* Login with SHH_AGE_KEY / pasted recovery secret
-LoginRecoverySecret ==
-  /\ recoverySecret = Recovery
-  /\ keyring' = Recovery
-  /\ vaultOpen' = FALSE
-  /\ UNCHANGED <<recipients, recoverySecret, qrPayload>>
-
-\* Decrypt vault if authorized
-DecryptVault ==
-  /\ keyring \in recipients
-  /\ vaultOpen' = TRUE
-  /\ UNCHANGED <<recipients, recoverySecret, qrPayload, keyring>>
-
-\* Failed decrypt attempt (wrong key / empty keyring)
-DecryptFail ==
-  /\ keyring \notin recipients
-  /\ vaultOpen' = FALSE
-  /\ UNCHANGED <<recipients, recoverySecret, qrPayload, keyring>>
-
-\* Remove daily recipient (must keep recovery)
+\* Drop daily recipient after recovery exists (still ≥1 recipient)
 RemoveDaily ==
   /\ Daily \in recipients
   /\ Recovery \in recipients
   /\ recipients' = recipients \ {Daily}
-  /\ keyring' = IF keyring = Daily THEN None ELSE keyring
-  /\ vaultOpen' = FALSE
-  /\ UNCHANGED <<recoverySecret, qrPayload>>
-
-\* Cannot model removing last recipient — that action is absent on purpose.
+  /\ session' = IF session = Daily THEN None ELSE session
+  /\ UNCHANGED qrReady
 
 Next ==
-  \/ GenerateRecovery
-  \/ EmitQR
-  \/ LoseDailyKey
+  \/ GenerateEmitQR
+  \/ LoseDaily
   \/ ScanQR
-  \/ LoginRecoverySecret
-  \/ DecryptVault
-  \/ DecryptFail
   \/ RemoveDaily
 
 Spec == Init /\ [][Next]_vars
-
-----------------------------------------------------------------------------
-\* Invariants checked by TLC
-Inv ==
-  /\ TypeOK
-  /\ DecryptOnlyIfRecipient
-  /\ QROnlyRecovery
-  /\ AlwaysSomeRecipient
-  /\ QRFidelity
-
-\* Reachability: dead Mac + QR recovery can still open vault
-\* (checked as a temporal property / bait via state constraint in cfg comments)
-\* TLC will explore ScanQR after LoseDailyKey after EmitQR after GenerateRecovery.
 
 =============================================================================
