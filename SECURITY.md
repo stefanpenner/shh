@@ -2,6 +2,23 @@
 
 This document explains the security architecture of `shh`: the encrypted file format, cryptographic choices, trust model, and what the system does and does not protect against.
 
+## Recovery QR (paper / 1Password)
+
+QR codes carry an **extractable** age secret (`AGE-SECRET-KEY-…`) for cold recovery only.
+
+| Control | Why |
+|---|---|
+| Encode only cryptographically valid secrets | No accidental QR of URLs, passphrases, or env dumps |
+| Decode rejects `http(s)://`, `javascript:`, `data:` | Blocks “quishing” (phishing via QR) |
+| Image size / dimension caps | Hostile oversized images |
+| File mode `0600` on `--qr-out` | Limit local file exposure |
+| Login uses string enroll (not path re-read) | Secret string that looks like a path is not opened as a file |
+| High error correction | Paper print + phone camera |
+
+**Operator duties (not enforced by code):** treat QR/paper like a master key; prefer 1Password; delete PNG after import; never commit QR images.
+
+Formal lifecycle model: `specs/RecoveryQR.tla`. Fuzz: `go test ./internal/qr/ -fuzz=…`.
+
 ## Encrypted File Format (`.env.enc`)
 
 The `.env.enc` file is plain TOML with five sections:

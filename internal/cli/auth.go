@@ -19,17 +19,16 @@ import (
 	"github.com/stefanpenner/shh/internal/sshkeys"
 )
 
-// runLoginQRFile decodes a recovery QR image and enrolls the age identity
-// (Ring 0 paper path: shh login --qr-file recovery.png).
+// runLoginQRFile decodes a recovery QR image and enrolls the extractable age
+// secret (Ring 0 paper path: shh login --qr-file recovery.png).
+// Rejects URLs, plugins, and garbage — only AGE-SECRET-KEY-… (ParseExtractableSecret).
 func runLoginQRFile(path string) error {
 	payload, err := qr.DecodeFile(path)
 	if err != nil {
 		return errors.Wrap(err, "decode QR")
 	}
-	if !qr.IsAgeIdentity(payload) {
-		return errors.New("QR payload is not an age identity (expected AGE-SECRET-KEY-… or AGE-PLUGIN-…)")
-	}
-	return runLoginIdentity(payload)
+	// DecodeFile already validated extractable secret; enroll without re-reading path as file.
+	return runLoginIdentityString(payload)
 }
 
 func requireGHUsername() (string, error) {
@@ -116,6 +115,13 @@ func runLoginIdentity(arg string) error {
 	if data, err := os.ReadFile(arg); err == nil { // #nosec G304 -- user-supplied identity file
 		identity = extractIdentity(string(data))
 	}
+	return runLoginIdentityString(identity)
+}
+
+// runLoginIdentityString enrolls an already-resolved identity string (no file path probe).
+// Used by QR login so a secret that happens to be a valid path name is not re-read as a file.
+func runLoginIdentityString(identity string) error {
+	identity = strings.TrimSpace(identity)
 	if err := crypto.ValidateIdentity(identity); err != nil {
 		return errors.Wrap(err, "not a valid age identity")
 	}
