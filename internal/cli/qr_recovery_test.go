@@ -13,9 +13,8 @@ import (
 	"github.com/stefanpenner/shh/internal/qr"
 )
 
-// Recovery QR round-trip (mirrors specs/RecoveryQR.tla):
-//   daily key encrypts vault → generate recovery → emit QR →
-//   lose daily key → login from QR → decrypt vault secrets.
+// Recovery QR round-trip (mirrors specs/RecoveryQR.tla GenerateEmitQR → ScanQR):
+//   daily encrypts vault → users add --qr → lose daily → login from QR → decrypt.
 func TestRecoveryQR_RoundTrip_TLAConformance(t *testing.T) {
 	useTempDir(t)
 
