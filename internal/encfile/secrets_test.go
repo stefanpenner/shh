@@ -379,3 +379,9 @@ func FuzzParsePlaintext(f *testing.F) {
 		ParsePlaintext(input)
 	})
 }
+
+func TestEncryptSecrets_RejectsEmptyRecipients(t *testing.T) {
+	_, err := EncryptSecrets(map[string]string{"A": "b"}, map[string]string{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "recipient")
+}
