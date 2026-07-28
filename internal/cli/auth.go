@@ -15,8 +15,22 @@ import (
 	"github.com/stefanpenner/shh/internal/envutil"
 	"github.com/stefanpenner/shh/internal/github"
 	"github.com/stefanpenner/shh/internal/keyring"
+	"github.com/stefanpenner/shh/internal/qr"
 	"github.com/stefanpenner/shh/internal/sshkeys"
 )
+
+// runLoginQRFile decodes a recovery QR image and enrolls the age identity
+// (Ring 0 paper path: shh login --qr-file recovery.png).
+func runLoginQRFile(path string) error {
+	payload, err := qr.DecodeFile(path)
+	if err != nil {
+		return errors.Wrap(err, "decode QR")
+	}
+	if !qr.IsAgeIdentity(payload) {
+		return errors.New("QR payload is not an age identity (expected AGE-SECRET-KEY-… or AGE-PLUGIN-…)")
+	}
+	return runLoginIdentity(payload)
+}
 
 func requireGHUsername() (string, error) {
 	return github.RequireUsername()

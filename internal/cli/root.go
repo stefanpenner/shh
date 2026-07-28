@@ -23,6 +23,16 @@ func Execute() {
 	}
 }
 
+func mustBool(cmd *cobra.Command, name string) bool {
+	v, _ := cmd.Flags().GetBool(name)
+	return v
+}
+
+func mustString(cmd *cobra.Command, name string) string {
+	v, _ := cmd.Flags().GetString(name)
+	return v
+}
+
 func newRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:           "shh",
@@ -42,10 +52,13 @@ func newRootCmd() *cobra.Command {
 	// login command
 	loginCmd := &cobra.Command{
 		Use:   "login",
-		Short: "Log in (auto-detects SSH key via GitHub, or --identity / --passphrase)",
+		Short: "Log in (auto-detects SSH key via GitHub, or --identity / --passphrase / --qr-file)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if pass, _ := cmd.Flags().GetBool("passphrase"); pass {
 				return runLoginPassphrase()
+			}
+			if qrFile, _ := cmd.Flags().GetString("qr-file"); qrFile != "" {
+				return runLoginQRFile(qrFile)
 			}
 			if id, _ := cmd.Flags().GetString("identity"); id != "" {
 				return runLoginIdentity(id)
@@ -55,6 +68,7 @@ func newRootCmd() *cobra.Command {
 	}
 	loginCmd.Flags().String("identity", "", "Enroll a provided age identity: a file path or an AGE-SECRET-KEY-… / AGE-PLUGIN-… string (YubiKey, Secure Enclave)")
 	loginCmd.Flags().Bool("passphrase", false, "Derive your key from a passphrase (brain key); prompts, never stored")
+	loginCmd.Flags().String("qr-file", "", "Enroll from a QR image (PNG/JPEG) containing AGE-SECRET-KEY-… (paper recovery)")
 	rootCmd.AddCommand(loginCmd)
 
 	// whoami command
@@ -302,12 +316,18 @@ func newRootCmd() *cobra.Command {
 				}
 				key = k
 			}
-			return usersAddCmd(args, name, key)
+			opts := usersAddOpts{
+				QR:    mustBool(cmd, "qr"),
+				QROut: mustString(cmd, "qr-out"),
+			}
+			return usersAddCmd(args, name, key, opts)
 		},
 	}
 	addCmd.Flags().String("name", "", "Name for a non-GitHub recipient (e.g. production-deploy)")
 	addCmd.Flags().String("key", "", "Age public key (optional with --name; generated if omitted)")
 	addCmd.Flags().Bool("passphrase", false, "Derive the recipient from a passphrase (brain key); prompts for it")
+	addCmd.Flags().Bool("qr", false, "When generating a secret key, print a terminal QR (for paper / 1Password scan)")
+	addCmd.Flags().String("qr-out", "", "When generating a secret key, write a PNG QR to this path (0600)")
 	usersCmd.AddCommand(addCmd)
 
 	usersCmd.AddCommand(&cobra.Command{
