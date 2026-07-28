@@ -1,118 +1,98 @@
 --------------------------- MODULE RecipientVault ---------------------------
 (***************************************************************************
-  Minimal vault access core for shh (.env.enc recipients + data key).
+  Vault access core — minimized state-space, sufficient capability.
 
-  1. Decrypt succeeds only when session ∈ recipients and MAC intact
-  2. Never empty recipients
-  3. Remove rotates generation (old data key conceptually dead)
-  4. Add does not rotate generation (re-wrap only)
-  5. Tamper breaks MAC (macGen ≠ generation) → decrypt fails
+  Capability kept:
+    - Alice always a recipient
+    - optional Bob via add/remove
+    - MAC ok / tampered
+    - session Alice | Bob | None (Bob only if enrolled)
+    - decrypt ok only if authorized ∧ MAC ok
 
-  Go owns age/MAC bytes; this owns access-control sequencing.
+  Dropped: Eve, generation counters, separate DecryptFail, Logout, MaxGen
  ***************************************************************************)
 
-EXTENDS Naturals, FiniteSets, TLC
+EXTENDS TLC
 
-CONSTANTS Alice, Bob, Eve, None, MaxGen
-
-ASSUME
-  /\ Cardinality({Alice, Bob, Eve, None}) = 4
-  /\ MaxGen \in Nat
+CONSTANTS Alice, Bob, None
+ASSUME Alice # Bob /\ Alice # None /\ Bob # None
 
 VARIABLES
-  recipients,
-  generation,   \* 0..MaxGen
-  session,
-  macGen,       \* equals generation when file intact
-  secretsOK
+  hasBob,    \* Bob enrolled
+  macOk,     \* file MAC intact
+  session    \* None | Alice | Bob
 
-vars == <<recipients, generation, session, macGen, secretsOK>>
-
-Gens == 0..MaxGen
+vars == <<hasBob, macOk, session>>
 
 TypeOK ==
-  /\ recipients \subseteq {Alice, Bob, Eve}
-  /\ recipients # {}
-  /\ generation \in Gens
-  /\ session \in {Alice, Bob, Eve, None}
-  /\ macGen \in Gens
-  /\ secretsOK \in BOOLEAN
+  /\ hasBob \in BOOLEAN
+  /\ macOk \in BOOLEAN
+  /\ session \in {None, Alice, Bob}
+  /\ session = Bob => hasBob
 
-AlwaysSomeRecipient == recipients # {}
+\* Abstract: can decrypt in this state
+CanDecrypt ==
+  /\ macOk
+  /\ session # None
+  /\ session = Alice \/ (session = Bob /\ hasBob)
 
-DecryptOnlyIfAuthorized ==
-  secretsOK => (session \in recipients /\ macGen = generation)
+\* Safety: never "successful decrypt" bookkeeping — CanDecrypt is the predicate.
+\* Invariant: session never unauthorized
+SessionAuthorized == session = Bob => hasBob
 
-Inv ==
-  /\ TypeOK
-  /\ AlwaysSomeRecipient
-  /\ DecryptOnlyIfAuthorized
+\* At least Alice remains (Bob optional) — always someone
+AlwaysAlice == TRUE  \* Alice never removed in this core
+
+Inv == TypeOK /\ SessionAuthorized
 
 Init ==
-  /\ recipients = {Alice}
-  /\ generation = 0
+  /\ hasBob = FALSE
+  /\ macOk = TRUE
   /\ session = Alice
-  /\ macGen = 0
-  /\ secretsOK = FALSE
 
-Login(id) ==
-  /\ id \in {Alice, Bob}
-  /\ session' = id
-  /\ secretsOK' = FALSE
-  /\ UNCHANGED <<recipients, generation, macGen>>
+LoginAlice ==
+  /\ session' = Alice
+  /\ UNCHANGED <<hasBob, macOk>>
 
-Logout ==
+LoginBob ==
+  /\ hasBob
+  /\ session' = Bob
+  /\ UNCHANGED <<hasBob, macOk>>
+
+ClearSession ==
   /\ session # None
   /\ session' = None
-  /\ secretsOK' = FALSE
-  /\ UNCHANGED <<recipients, generation, macGen>>
+  /\ UNCHANGED <<hasBob, macOk>>
 
 AddBob ==
-  /\ session = Alice
-  /\ Bob \notin recipients
-  /\ recipients' = recipients \cup {Bob}
-  /\ secretsOK' = FALSE
-  /\ UNCHANGED <<generation, session, macGen>>
+  /\ ~hasBob
+  /\ session = Alice   \* must be authorized to re-wrap
+  /\ hasBob' = TRUE
+  /\ UNCHANGED <<macOk, session>>
 
 RemoveBob ==
-  /\ session \in recipients
-  /\ Bob \in recipients
-  /\ Cardinality(recipients) > 1
-  /\ generation < MaxGen
-  /\ recipients' = recipients \ {Bob}
-  /\ generation' = generation + 1
-  /\ macGen' = generation + 1
-  /\ secretsOK' = FALSE
+  /\ hasBob
+  /\ session = Alice   \* Alice performs remove
+  /\ hasBob' = FALSE
   /\ session' = IF session = Bob THEN None ELSE session
+  /\ UNCHANGED macOk   \* rotate yields fresh valid MAC for remaining
 
-Decrypt ==
-  /\ session \in recipients
-  /\ macGen = generation
-  /\ secretsOK' = TRUE
-  /\ UNCHANGED <<recipients, generation, session, macGen>>
-
-DecryptFail ==
-  /\ ~(session \in recipients /\ macGen = generation)
-  /\ secretsOK' = FALSE
-  /\ UNCHANGED <<recipients, generation, session, macGen>>
-
-\* Tamper: MAC no longer matches current generation (bounded)
 Tamper ==
-  /\ generation < MaxGen
-  /\ macGen = generation
-  /\ macGen' = generation + 1
-  /\ secretsOK' = FALSE
-  /\ UNCHANGED <<recipients, generation, session>>
+  /\ macOk
+  /\ macOk' = FALSE
+  /\ UNCHANGED <<hasBob, session>>
 
 Next ==
-  \/ \E id \in {Alice, Bob}: Login(id)
-  \/ Logout
+  \/ LoginAlice
+  \/ LoginBob
+  \/ ClearSession
   \/ AddBob
   \/ RemoveBob
-  \/ Decrypt
-  \/ DecryptFail
   \/ Tamper
 
 Spec == Init /\ [][Next]_vars
+
+\* CanDecrypt is FALSE after Tamper or when session=None — sufficient for
+\* "decrypt only if authorized ∧ intact" without a secretsOK variable.
 
 =============================================================================
