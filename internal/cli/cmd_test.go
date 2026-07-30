@@ -103,6 +103,21 @@ func TestCmdRun_FiltersShhPlaintext(t *testing.T) {
 	assert.Error(t, err, "SHH_PLAINTEXT should not be in child environment")
 }
 
+// CI path: SHH_PLAINTEXT loads secrets without needing a decrypt identity.
+// No keyring / SHH_AGE_KEY required when the operator opted into plaintext.
+func TestCmdRun_PlaintextSkipsAgeKey(t *testing.T) {
+	dir := useTempDir(t)
+	plain := filepath.Join(dir, ".env")
+	require.NoError(t, os.WriteFile(plain, []byte("CI_SECRET=from-plain\n"), 0600))
+	t.Setenv("SHH_PLAINTEXT", plain)
+	t.Setenv("SHH_AGE_KEY", "") // ensure no override
+	// Clear keyring path: GetKey would fail with no key; plaintext must not call it.
+	os.Unsetenv("SHH_AGE_KEY")
+
+	err := cmdRun(".env.enc", []string{"printenv", "CI_SECRET"})
+	assert.NoError(t, err)
+}
+
 func TestCmdRun_NoArgs(t *testing.T) {
 	err := cmdRun(".env.enc", nil)
 	assert.Error(t, err)

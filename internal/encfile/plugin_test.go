@@ -27,6 +27,28 @@ func buildStubPlugin(t *testing.T) {
 	out, err := exec.Command("go", "build", "-o", bin, "../crypto/testdata/age-plugin-shhtest").CombinedOutput()
 	require.NoError(t, err, "build stub plugin: %s", out)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SHH_ALLOWED_AGE_PLUGINS", "shhtest") // opt the test plugin past the allowlist
+}
+
+// Load must fail closed on a file whose recipients reference a disallowed age
+// plugin — otherwise a tampered .env.enc could trigger age-plugin-<name> exec.
+func TestLoadRejectsDisallowedPluginRecipient(t *testing.T) {
+	data := make([]byte, 32)
+	_, err := rand.Read(data)
+	require.NoError(t, err)
+	ef := &encfile.EncryptedFile{
+		Version:     2,
+		Recipients:  map[string]string{"x": plugin.EncodeRecipient("evil", data)},
+		WrappedKeys: map[string]string{},
+		Secrets:     map[string]string{},
+	}
+	raw, err := encfile.Marshal(ef)
+	require.NoError(t, err)
+	p := filepath.Join(t.TempDir(), ".env.enc")
+	require.NoError(t, os.WriteFile(p, raw, 0o600))
+
+	_, err = encfile.Load(p)
+	require.Error(t, err, "Load must reject a disallowed plugin recipient")
 }
 
 func stubKeys(t *testing.T) (recipient, identity string) {

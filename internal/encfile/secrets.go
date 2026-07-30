@@ -26,6 +26,17 @@ func verifyMAC(ef *EncryptedFile, dataKey []byte) error {
 }
 
 func EncryptSecrets(secrets map[string]string, recipients map[string]string) (*EncryptedFile, error) {
+	if len(recipients) == 0 {
+		return nil, errors.New("at least one recipient is required")
+	}
+	// Fail closed before any plugin/X25519 wrap: untrusted maps may carry
+	// disallowed plugin recipients (same gate as Load/normalize).
+	for name, rec := range recipients {
+		if err := crypto.EnsureRecipientAllowed(rec); err != nil {
+			return nil, errors.Wrapf(err, "recipient %q", name)
+		}
+	}
+
 	dataKey, err := crypto.GenerateDataKey()
 	if err != nil {
 		return nil, err
@@ -137,6 +148,15 @@ func DecryptSecrets(ef *EncryptedFile, privateKey string) (map[string]string, er
 
 // ReWrapDataKey re-wraps the data key for a new set of recipients using the provided private key.
 func ReWrapDataKey(ef *EncryptedFile, newRecipients map[string]string, privateKey string) error {
+	if len(newRecipients) == 0 {
+		return errors.New("at least one recipient is required")
+	}
+	for name, rec := range newRecipients {
+		if err := crypto.EnsureRecipientAllowed(rec); err != nil {
+			return errors.Wrapf(err, "recipient %q", name)
+		}
+	}
+
 	// Unwrap with the current identity — handles X25519 and plugin identities
 	// (YubiKey/Secure Enclave) alike, so you can add/remove users while
 	// authenticated with a hardware key.
