@@ -11,6 +11,49 @@ import (
 	"github.com/stefanpenner/shh/internal/envutil"
 )
 
+// escapeEnvValue escapes a plaintext value for single-line storage.
+// Backslashes are doubled (\ → \\) and newlines are encoded as \n.
+// This ensures FormatPlaintext → ParsePlaintext roundtrips correctly
+// for values that contain embedded newlines (e.g. PEM private keys).
+func escapeEnvValue(v string) string {
+	if !strings.ContainsAny(v, "\\\n\r") {
+		return v // fast path: most values need no escaping
+	}
+	v = strings.ReplaceAll(v, `\`, `\\`)
+	v = strings.ReplaceAll(v, "\r", `\r`)
+	v = strings.ReplaceAll(v, "\n", `\n`)
+	return v
+}
+
+// unescapeEnvValue reverses escapeEnvValue: \\ → \, \n → newline, \r → CR.
+func unescapeEnvValue(v string) string {
+	if !strings.Contains(v, `\`) {
+		return v // fast path
+	}
+	var sb strings.Builder
+	sb.Grow(len(v))
+	for i := 0; i < len(v); i++ {
+		if v[i] == '\\' && i+1 < len(v) {
+			switch v[i+1] {
+			case '\\':
+				sb.WriteByte('\\')
+				i++
+				continue
+			case 'n':
+				sb.WriteByte('\n')
+				i++
+				continue
+			case 'r':
+				sb.WriteByte('\r')
+				i++
+				continue
+			}
+		}
+		sb.WriteByte(v[i])
+	}
+	return sb.String()
+}
+
 func ParsePlaintext(content string) map[string]string {
 	m := make(map[string]string)
 	scanner := bufio.NewScanner(strings.NewReader(content))
@@ -20,7 +63,7 @@ func ParsePlaintext(content string) map[string]string {
 			continue
 		}
 		if idx := strings.IndexByte(line, '='); idx >= 0 {
-			m[line[:idx]] = line[idx+1:]
+			m[line[:idx]] = unescapeEnvValue(line[idx+1:])
 		}
 	}
 	return m
@@ -29,7 +72,7 @@ func ParsePlaintext(content string) map[string]string {
 func FormatPlaintext(secrets map[string]string) string {
 	var buf strings.Builder
 	for _, k := range envutil.SortedKeys(secrets) {
-		fmt.Fprintf(&buf, "%s=%s\n", k, secrets[k])
+		fmt.Fprintf(&buf, "%s=%s\n", k, escapeEnvValue(secrets[k]))
 	}
 	return buf.String()
 }

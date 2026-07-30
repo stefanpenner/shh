@@ -110,6 +110,7 @@ func TestDangerousEnvVarDenylist(t *testing.T) {
 		"ZDOTDIR",
 		"NODE_OPTIONS", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS",
 		"PYTHONSTARTUP", "RUBYOPT", "PERL5OPT", "DOTNET_STARTUP_HOOKS",
+		"PYTHONPATH", "RUBYLIB", "PERL5LIB",
 	}
 	for _, key := range blocked {
 		t.Run(key, func(t *testing.T) {
