@@ -37,6 +37,14 @@ func TestReadNewPassphraseRejectsMismatch(t *testing.T) {
 	require.Error(t, err, "mismatched confirmation must fail")
 }
 
+func TestReadNewPassphraseEnforcesMinLength(t *testing.T) {
+	orig := readSecret
+	defer func() { readSecret = orig }()
+	readSecret = func(string) (string, error) { return "short", nil } // matching, but too weak
+	_, err := readNewPassphrase()
+	require.Error(t, err, "a too-short passphrase must be rejected at enrollment")
+}
+
 func TestReadNewPassphraseRejectsEmpty(t *testing.T) {
 	orig := readSecret
 	defer func() { readSecret = orig }()

@@ -15,8 +15,21 @@ import (
 	"github.com/stefanpenner/shh/internal/envutil"
 	"github.com/stefanpenner/shh/internal/github"
 	"github.com/stefanpenner/shh/internal/keyring"
+	"github.com/stefanpenner/shh/internal/qr"
 	"github.com/stefanpenner/shh/internal/sshkeys"
 )
+
+// runLoginQRFile decodes a recovery QR image and enrolls the extractable age
+// secret (Ring 0 paper path: shh login --qr-file recovery.png).
+// Rejects URLs, plugins, and garbage — only AGE-SECRET-KEY-… (ParseExtractableSecret).
+func runLoginQRFile(path string) error {
+	payload, err := qr.DecodeFile(path)
+	if err != nil {
+		return errors.Wrap(err, "decode QR")
+	}
+	// DecodeFile already validated extractable secret; enroll without re-reading path as file.
+	return runLoginIdentityString(payload)
+}
 
 func requireGHUsername() (string, error) {
 	return github.RequireUsername()
@@ -33,6 +46,11 @@ var readSecret = func(prompt string) (string, error) {
 
 // readNewPassphrase prompts twice and confirms — a brain key is unrecoverable if
 // you fat-finger it, so we never set one from a single unconfirmed entry.
+// minPassphraseLen is a coarse weak-phrase floor at enrollment. .env.enc is
+// committed and brute-forceable offline, so we reject obviously-weak inputs.
+// (Login does not enforce it — an existing key must always remain unlockable.)
+const minPassphraseLen = 12
+
 func readNewPassphrase() (string, error) {
 	p1, err := readSecret("New passphrase: ")
 	if err != nil {
@@ -42,11 +60,17 @@ func readNewPassphrase() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Trim before compare/length so enrollment matches what IdentityFromPassphrase
+	// derives (same Cf-aware trim).
+	p1, p2 = crypto.TrimPassphrase(p1), crypto.TrimPassphrase(p2)
 	if p1 != p2 {
 		return "", errors.New("passphrases do not match")
 	}
-	if strings.TrimSpace(p1) == "" {
+	if p1 == "" {
 		return "", errors.New("empty passphrase")
+	}
+	if len(p1) < minPassphraseLen {
+		return "", errors.Newf("passphrase too short (%d chars, need >= %d) — use a generated high-entropy passphrase (e.g. 8 diceware words)", len(p1), minPassphraseLen)
 	}
 	return p1, nil
 }
@@ -91,6 +115,13 @@ func runLoginIdentity(arg string) error {
 	if data, err := os.ReadFile(arg); err == nil { // #nosec G304 -- user-supplied identity file
 		identity = extractIdentity(string(data))
 	}
+	return runLoginIdentityString(identity)
+}
+
+// runLoginIdentityString enrolls an already-resolved identity string (no file path probe).
+// Used by QR login so a secret that happens to be a valid path name is not re-read as a file.
+func runLoginIdentityString(identity string) error {
+	identity = strings.TrimSpace(identity)
 	if err := crypto.ValidateIdentity(identity); err != nil {
 		return errors.Wrap(err, "not a valid age identity")
 	}

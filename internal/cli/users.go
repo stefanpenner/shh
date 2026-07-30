@@ -13,6 +13,7 @@ import (
 	"github.com/stefanpenner/shh/internal/envutil"
 	"github.com/stefanpenner/shh/internal/github"
 	"github.com/stefanpenner/shh/internal/keyring"
+	"github.com/stefanpenner/shh/internal/qr"
 )
 
 const shhUserPrefix = "shh-user://"
@@ -59,9 +60,16 @@ func usersListCmd() error {
 	return nil
 }
 
-func usersAddCmd(args []string, deployName, deployKey string) error {
+// usersAddOpts configures optional recovery QR emission for generated keys.
+type usersAddOpts struct {
+	QROut string // path to write PNG; empty = no file
+	QR    bool   // also print a small ANSI QR to stderr when generating a secret
+}
+
+func usersAddCmd(args []string, deployName, deployKey string, opts usersAddOpts) error {
 	var newKey, name string
 	var err error
+	var generatedSecret string // set when we mint an extractable age identity
 
 	if deployName != "" {
 		// Deploy key mode: --name provided
@@ -84,11 +92,13 @@ func usersAddCmd(args []string, deployName, deployKey string) error {
 				return errors.Wrap(err, "generate age key")
 			}
 			newKey = identity.Recipient().String()
+			generatedSecret = identity.String()
 			fmt.Println(hintStyle.Render("Secret key (store this in your CI/deploy platform as SHH_AGE_KEY):"))
 			fmt.Println()
-			fmt.Printf("  SHH_AGE_KEY=%s\n", identity.String())
+			fmt.Printf("  SHH_AGE_KEY=%s\n", generatedSecret)
 			fmt.Println()
 			fmt.Println(hintStyle.Render("This is the only time this key will be displayed."))
+			fmt.Println(hintStyle.Render("Hint: " + qr.ChecksumHint(generatedSecret) + " — eyeball-check on paper cards."))
 		}
 	} else if len(args) > 0 {
 		// GitHub / raw age key mode (existing behavior)
@@ -158,7 +168,44 @@ func usersAddCmd(args []string, deployName, deployKey string) error {
 	}
 
 	fmt.Println(successStyle.Render(fmt.Sprintf("Added %s.", RecipientDisplayName(name))))
+
+	if generatedSecret != "" && (opts.QR || opts.QROut != "") {
+		if err := emitRecoveryQR(generatedSecret, opts); err != nil {
+			return err
+		}
+	} else if (opts.QR || opts.QROut != "") && generatedSecret == "" {
+		fmt.Println(hintStyle.Render("Note: --qr only applies when a new secret key is generated (omit --key)."))
+	}
 	return nil
+}
+
+// emitRecoveryQR writes a PNG and/or terminal hint for the recovery identity.
+// The secret is never written to stdout as image bytes — file path only.
+func emitRecoveryQR(secret string, opts usersAddOpts) error {
+	if opts.QROut != "" {
+		if err := qr.EncodeFile(secret, opts.QROut); err != nil {
+			return errors.Wrap(err, "write QR PNG")
+		}
+		fmt.Println(successStyle.Render(fmt.Sprintf("QR written to %s (0600) — print or import to 1Password, then delete the file.", opts.QROut)))
+	}
+	if opts.QR {
+		// Compact ANSI QR on stderr so stdout stays scriptable for SHH_AGE_KEY lines.
+		code, err := encodeANSI(secret)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, hintStyle.Render("Recovery QR (scan into 1Password / paper; do not commit):"))
+		fmt.Fprint(os.Stderr, code)
+		fmt.Fprintln(os.Stderr)
+	}
+	return nil
+}
+
+// encodeANSI is a thin wrapper so tests can stub if needed; uses Medium PNG
+// path is primary — ANSI is best-effort via go-qrcode's ToSmallString.
+func encodeANSI(payload string) (string, error) {
+	return qr.EncodeANSI(payload)
 }
 
 func usersRemoveCmd(args []string) error {

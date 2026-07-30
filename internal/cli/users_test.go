@@ -180,7 +180,7 @@ func TestUsersAddWithNameGeneratesKey(t *testing.T) {
 	require.NoError(t, encfile.Save(".env.enc", ef))
 
 	// Add a deploy key with --name (no --key, should generate)
-	err = usersAddCmd(nil, "production-deploy", "")
+	err = usersAddCmd(nil, "production-deploy", "", usersAddOpts{})
 	require.NoError(t, err)
 
 	// Verify the recipient was added with shh-user:// prefix
@@ -210,7 +210,7 @@ func TestUsersAddWithNameAndKey(t *testing.T) {
 	require.NoError(t, encfile.Save(".env.enc", ef))
 
 	// Add with --name and --key
-	err = usersAddCmd(nil, "staging-deploy", pub2)
+	err = usersAddCmd(nil, "staging-deploy", pub2, usersAddOpts{})
 	require.NoError(t, err)
 
 	loaded, err := encfile.Load(".env.enc")
@@ -250,7 +250,7 @@ func TestUsersRemoveByDisplayNameAmbiguous(t *testing.T) {
 
 func TestUsersAddWithNameRequiresName(t *testing.T) {
 	// No positional arg, no --name → error
-	err := usersAddCmd(nil, "", "")
+	err := usersAddCmd(nil, "", "", usersAddOpts{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "--name")
 }
@@ -260,15 +260,15 @@ func TestUsersAddWithNameRejectsInvalidName(t *testing.T) {
 	// Go's %q produces \a, \v etc. which are not valid TOML escape sequences,
 	// which would corrupt the encrypted secrets file.
 	invalidNames := []string{
-		"deploy\x07prod",  // BEL — Go %q → \a, invalid in TOML
-		"deploy\x0bprod",  // VT  — Go %q → \v, invalid in TOML
-		"../traversal",    // path traversal
-		"",                // empty string
-		"has space",       // spaces not allowed
-		"has/slash",       // slashes not allowed
+		"deploy\x07prod", // BEL — Go %q → \a, invalid in TOML
+		"deploy\x0bprod", // VT  — Go %q → \v, invalid in TOML
+		"../traversal",   // path traversal
+		"",               // empty string
+		"has space",      // spaces not allowed
+		"has/slash",      // slashes not allowed
 	}
 	for _, name := range invalidNames {
-		err := usersAddCmd(nil, name, "")
+		err := usersAddCmd(nil, name, "", usersAddOpts{})
 		assert.Error(t, err, "expected error for deploy name %q", name)
 	}
 }
@@ -281,7 +281,7 @@ func TestUsersAddWithNameDuplicate(t *testing.T) {
 
 	secrets := map[string]string{"SECRET": "hello"}
 	recipients := map[string]string{
-		"https://github.com/alice":      pub1,
+		"https://github.com/alice":     pub1,
 		"shh-user://production-deploy": pub1,
 	}
 	ef, err := encfile.EncryptSecrets(secrets, recipients)
@@ -289,7 +289,7 @@ func TestUsersAddWithNameDuplicate(t *testing.T) {
 	require.NoError(t, encfile.Save(".env.enc", ef))
 
 	// Adding the same name again should fail
-	err = usersAddCmd(nil, "production-deploy", "")
+	err = usersAddCmd(nil, "production-deploy", "", usersAddOpts{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "already in use")
 }

@@ -2,11 +2,22 @@ package crypto
 
 import (
 	"strings"
+	"unicode"
 
 	"filippo.io/age"
 	"github.com/cockroachdb/errors"
 	"golang.org/x/crypto/argon2"
 )
+
+// TrimPassphrase strips leading/trailing whitespace AND zero-width / format (Cf)
+// characters (U+200B, U+FEFF, bidi marks, …). Invisible clipboard/IME artifacts
+// would otherwise fork the derived key and permanently lock out a brain key.
+// Enrollment and login must both route through this so they always agree.
+func TrimPassphrase(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.Is(unicode.Cf, r)
+	})
+}
 
 // Fixed, PUBLIC parameters for passphrase-derived ("brain") keys. These are a
 // permanent contract: changing ANY of them changes the derived key, so an
@@ -30,7 +41,11 @@ const (
 // normal age1… string and its identity is AGE-SECRET-KEY-1…, so the rest of shh
 // (recipients map, wrapping, decryption) treats it like any other key.
 func IdentityFromPassphrase(passphrase string) (*age.X25519Identity, error) {
-	if strings.TrimSpace(passphrase) == "" {
+	// Trim once, before the KDF, so a stray leading/trailing space at enrollment
+	// can't derive a different key than a clean login types — a permanent lockout
+	// for a nothing-stored failsafe.
+	passphrase = TrimPassphrase(passphrase)
+	if passphrase == "" {
 		return nil, errors.New("empty passphrase")
 	}
 	// The salt is the fixed public label itself (argon2 only needs >= 8 bytes).

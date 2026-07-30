@@ -28,12 +28,14 @@ func buildStubPlugin(t *testing.T) {
 	out, err := exec.Command("go", "build", "-o", bin, "./testdata/age-plugin-shhtest").CombinedOutput()
 	require.NoError(t, err, "build stub plugin: %s", out)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SHH_ALLOWED_AGE_PLUGINS", "shhtest") // opt the test plugin past the allowlist
 }
 
 // stubKeys returns a matching (recipient, identity) pair for the stub plugin.
 // The XOR key material rides inside the encodings, so the stub stays generic.
 func stubKeys(t *testing.T) (recipient, identity string) {
 	t.Helper()
+	t.Setenv("SHH_ALLOWED_AGE_PLUGINS", "shhtest") // allow the test plugin past the allowlist
 	key := make([]byte, 32)
 	_, err := rand.Read(key)
 	require.NoError(t, err)

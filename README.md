@@ -90,6 +90,31 @@ shh users add <username-or-key>       # add by GitHub username or age key
 shh users remove <user|#>            # revoke access (rotates data key)
 ```
 
+## Recovery root (paper / 1Password / QR)
+
+Keep at least two ways to open `.env.enc` (daily Mac key + recovery).  
+Generate a recovery recipient with a scannable QR:
+
+```bash
+# In a repo that has .env.enc and your daily key in the keyring / SHH_AGE_KEY:
+shh users add --name recovery --qr --qr-out ~/Desktop/shh-recovery.png
+# → prints AGE-SECRET-KEY-1… once (paste into 1Password)
+# → terminal QR on stderr + PNG at --qr-out (print, then delete the file)
+git add .env.enc && git commit -m "shh: add recovery recipient"
+```
+
+Restore on a new machine from the QR image:
+
+```bash
+shh login --qr-file ~/path/to/shh-recovery.png
+shh doctor
+shh env --stdout | head   # proves decrypt
+```
+
+Or without QR: `export SHH_AGE_KEY='AGE-SECRET-KEY-1…'` then `shh env --stdout`.
+
+Formal model of this flow: `specs/RecoveryQR.tla` (`tlc specs/RecoveryQR.tla`).
+
 ## CI / Production
 
 Create a deploy key for environments that don't have a GitHub identity:
@@ -97,6 +122,7 @@ Create a deploy key for environments that don't have a GitHub identity:
 ```bash
 shh users add --name production-deploy
 # Prints a secret key — store it as SHH_AGE_KEY in your CI/deploy platform
+# Optional: --qr --qr-out ./deploy.png for a one-time cold copy
 git add .env.enc && git push
 ```
 
