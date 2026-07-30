@@ -9,13 +9,13 @@ import (
 
 func TestMergeSecrets(t *testing.T) {
 	tests := []struct {
-		name       string
-		ancestor   map[string]string
-		ours       map[string]string
-		theirs     map[string]string
-		want       map[string]string
-		wantConf   []string
-		wantErr    bool
+		name     string
+		ancestor map[string]string
+		ours     map[string]string
+		theirs   map[string]string
+		want     map[string]string
+		wantConf []string
+		wantErr  bool
 	}{
 		{
 			name:     "no conflict, both add different keys",
