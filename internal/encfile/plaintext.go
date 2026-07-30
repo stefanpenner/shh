@@ -43,7 +43,16 @@ func LoadSecrets(encFile string, privateKey string) (map[string]string, error) {
 		if err != nil {
 			return nil, errors.Wrapf(err, "read plaintext file %s", plainFile)
 		}
-		return ParsePlaintext(string(data)), nil
+		secrets := ParsePlaintext(string(data))
+		for k := range secrets {
+			if !envutil.EnvVarKeyPattern.MatchString(k) {
+				return nil, errors.Newf("SHH_PLAINTEXT file contains invalid key name %q (must match [A-Za-z_][A-Za-z0-9_]*)", k)
+			}
+			if envutil.DangerousEnvVars[k] {
+				return nil, errors.Newf("SHH_PLAINTEXT file contains dangerous env var %q", k)
+			}
+		}
+		return secrets, nil
 	}
 
 	ef, err := Load(encFile)
