@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	goqrcode "github.com/skip2/go-qrcode"
@@ -39,10 +40,12 @@ func TestRecoveryQR_E2E_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, loaded.Recipients, 2)
 
-	// QR file mode 0600
-	st, err := os.Stat(qrPath)
-	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o600), st.Mode().Perm())
+	// QR file mode 0600 (POSIX only; Windows ACLs don't map to this)
+	if runtime.GOOS != "windows" {
+		st, err := os.Stat(qrPath)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o600), st.Mode().Perm())
+	}
 
 	payload, err := qr.DecodeFile(qrPath)
 	require.NoError(t, err)
