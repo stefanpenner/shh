@@ -41,6 +41,11 @@ func EncryptSecrets(secrets map[string]string, recipients map[string]string) (*E
 	if err != nil {
 		return nil, err
 	}
+	defer func() { // zero key material when function returns
+		for i := range dataKey {
+			dataKey[i] = 0
+		}
+	}()
 
 	wrappedKeys, err := crypto.WrapDataKeyPerRecipient(dataKey, recipients)
 	if err != nil {
@@ -128,6 +133,11 @@ func DecryptSecrets(ef *EncryptedFile, privateKey string) (map[string]string, er
 	if err != nil {
 		return nil, err
 	}
+	defer func() { // zero key material when function returns
+		for i := range dataKey {
+			dataKey[i] = 0
+		}
+	}()
 
 	// Verify MAC
 	if err := verifyMAC(ef, dataKey); err != nil {
@@ -164,6 +174,11 @@ func ReWrapDataKey(ef *EncryptedFile, newRecipients map[string]string, privateKe
 	if err != nil {
 		return err
 	}
+	defer func() { // zero key material when function returns
+		for i := range dataKey {
+			dataKey[i] = 0
+		}
+	}()
 
 	// Verify MAC before trusting and re-wrapping the data key.
 	// Without this check, an attacker who can modify .env.enc could substitute
