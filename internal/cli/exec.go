@@ -30,11 +30,7 @@ func appendSecrets(env []string, secrets map[string]string) []string {
 }
 
 func cmdShell(file string) error {
-	privKey, err := keyring.GetKey()
-	if err != nil {
-		return err
-	}
-	secrets, err := encfile.LoadSecrets(file, privKey)
+	secrets, err := loadRunSecrets(file)
 	if err != nil {
 		return err
 	}
@@ -48,6 +44,20 @@ func cmdShell(file string) error {
 
 	fmt.Println(successStyle.Render("Secrets loaded.") + " Type 'exit' to end session.")
 	return syscall.Exec(shell, []string{shell}, env) // #nosec G702,G204
+}
+
+// loadRunSecrets loads secrets for run/shell. SHH_PLAINTEXT is an explicit
+// operator escape hatch (CI): skip age identity entirely so throwaway CI
+// never needs a decrypt key.
+func loadRunSecrets(file string) (map[string]string, error) {
+	if os.Getenv("SHH_PLAINTEXT") != "" {
+		return encfile.LoadSecrets(file, "")
+	}
+	privKey, err := keyring.GetKey()
+	if err != nil {
+		return nil, err
+	}
+	return encfile.LoadSecrets(file, privKey)
 }
 
 func parseRunArgs(args []string) (file string, cmdArgs []string) {
@@ -80,11 +90,7 @@ func cmdRun(file string, args []string) error {
 		file = envutil.FindEncFile()
 	}
 
-	privKey, err := keyring.GetKey()
-	if err != nil {
-		return err
-	}
-	secrets, err := encfile.LoadSecrets(file, privKey)
+	secrets, err := loadRunSecrets(file)
 	if err != nil {
 		return err
 	}

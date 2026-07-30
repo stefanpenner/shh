@@ -6,6 +6,7 @@
 //   - Encode rejects URLs and non-identity data (no "dynamic QR" / shortener phishing).
 //   - Decode bounds image size (no giant-file DoS) and re-validates payload.
 //   - Round-trip Encode→Decode preserves the secret exactly (Go tests + fuzz).
+//
 // Crypto of .env.enc itself is unchanged; this is only the recovery *carrier*.
 package qr
 

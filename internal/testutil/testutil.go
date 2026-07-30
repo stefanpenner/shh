@@ -16,7 +16,7 @@ func UseTempDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	orig, _ := os.Getwd()
-	os.Chdir(dir)                         // #nosec G104 -- test helper; chdir failure surfaces as test assertion errors
+	os.Chdir(dir)                        // #nosec G104 -- test helper; chdir failure surfaces as test assertion errors
 	t.Cleanup(func() { os.Chdir(orig) }) // #nosec G104 -- best-effort restore in test cleanup
 	return dir
 }

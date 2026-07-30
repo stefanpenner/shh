@@ -260,12 +260,12 @@ func TestUsersAddWithNameRejectsInvalidName(t *testing.T) {
 	// Go's %q produces \a, \v etc. which are not valid TOML escape sequences,
 	// which would corrupt the encrypted secrets file.
 	invalidNames := []string{
-		"deploy\x07prod",  // BEL — Go %q → \a, invalid in TOML
-		"deploy\x0bprod",  // VT  — Go %q → \v, invalid in TOML
-		"../traversal",    // path traversal
-		"",                // empty string
-		"has space",       // spaces not allowed
-		"has/slash",       // slashes not allowed
+		"deploy\x07prod", // BEL — Go %q → \a, invalid in TOML
+		"deploy\x0bprod", // VT  — Go %q → \v, invalid in TOML
+		"../traversal",   // path traversal
+		"",               // empty string
+		"has space",      // spaces not allowed
+		"has/slash",      // slashes not allowed
 	}
 	for _, name := range invalidNames {
 		err := usersAddCmd(nil, name, "", usersAddOpts{})
@@ -281,7 +281,7 @@ func TestUsersAddWithNameDuplicate(t *testing.T) {
 
 	secrets := map[string]string{"SECRET": "hello"}
 	recipients := map[string]string{
-		"https://github.com/alice":      pub1,
+		"https://github.com/alice":     pub1,
 		"shh-user://production-deploy": pub1,
 	}
 	ef, err := encfile.EncryptSecrets(secrets, recipients)
