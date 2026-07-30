@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -61,9 +62,11 @@ func TestEncodeDecodeFile_RoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "recovery.png")
 	require.NoError(t, EncodeFile(secret, path))
 
-	st, err := os.Stat(path)
-	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o600), st.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		st, err := os.Stat(path)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o600), st.Mode().Perm())
+	}
 
 	got, err := DecodeFile(path)
 	require.NoError(t, err)
