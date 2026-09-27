@@ -13,7 +13,6 @@ import (
 	"github.com/stefanpenner/shh/internal/sshkeys"
 )
 
-// DoctorCheck represents the result of a single diagnostic check.
 type DoctorCheck struct {
 	Name    string
 	Status  bool
@@ -22,19 +21,17 @@ type DoctorCheck struct {
 
 func RunDoctorChecks(getKeyFn func() (string, error), ghUsernameFn func() string, findSSHKeysFn func() []string, encFile string) []DoctorCheck {
 	var checks []DoctorCheck
-	var privKey string
+	var privKey, pubKey string
 
-	// 1. Age key
 	key, err := getKeyFn()
 	if err != nil {
 		checks = append(checks, DoctorCheck{"age key", false, "no key found (run 'shh init')"})
 	} else {
 		privKey = key
-		pubKey, _ := crypto.PublicKeyFrom(privKey)
+		pubKey, _ = crypto.PublicKeyFrom(privKey)
 		checks = append(checks, DoctorCheck{"age key", true, pubKey})
 	}
 
-	// 2. GitHub CLI
 	username := ghUsernameFn()
 	if username == "" {
 		checks = append(checks, DoctorCheck{"github cli", false, "gh not installed or not logged in"})
@@ -42,7 +39,6 @@ func RunDoctorChecks(getKeyFn func() (string, error), ghUsernameFn func() string
 		checks = append(checks, DoctorCheck{"github cli", true, username})
 	}
 
-	// 3. SSH keys
 	sshKeyPaths := findSSHKeysFn()
 	if len(sshKeyPaths) == 0 {
 		checks = append(checks, DoctorCheck{"ssh keys", false, "no ed25519 keys found in ~/.ssh"})
@@ -50,32 +46,25 @@ func RunDoctorChecks(getKeyFn func() (string, error), ghUsernameFn func() string
 		checks = append(checks, DoctorCheck{"ssh keys", true, fmt.Sprintf("%d ed25519 key(s) found", len(sshKeyPaths))})
 	}
 
-	// 4. Encrypted file
 	ef, err := encfile.Load(encFile)
 	if err != nil {
 		checks = append(checks, DoctorCheck{"encrypted file", false, fmt.Sprintf("%s not found or invalid", encFile)})
-	} else {
-		checks = append(checks, DoctorCheck{"encrypted file", true, fmt.Sprintf("%s (%d secret(s), %d recipient(s))", encFile, len(ef.Secrets), len(ef.Recipients))})
+		return checks
+	}
+	checks = append(checks, DoctorCheck{"encrypted file", true, fmt.Sprintf("%s (%d secret(s), %d recipient(s))", encFile, len(ef.Secrets), len(ef.Recipients))})
+	if privKey != "" {
+		checks = append(checks, recipientCheck(ef.Recipients, pubKey))
+	}
+	return checks
+}
 
-		// 5. Recipient check (only if file exists and we have a key)
-		if privKey != "" {
-			pubKey, _ := crypto.PublicKeyFrom(privKey)
-			found := false
-			for _, pk := range ef.Recipients {
-				if pk == pubKey {
-					found = true
-					break
-				}
-			}
-			if found {
-				checks = append(checks, DoctorCheck{"recipient", true, "your key is authorized"})
-			} else {
-				checks = append(checks, DoctorCheck{"recipient", false, "your key is NOT in the recipients list"})
-			}
+func recipientCheck(recipients map[string]string, pubKey string) DoctorCheck {
+	for _, pk := range recipients {
+		if pk == pubKey {
+			return DoctorCheck{"recipient", true, "your key is authorized"}
 		}
 	}
-
-	return checks
+	return DoctorCheck{"recipient", false, "your key is NOT in the recipients list"}
 }
 
 func cmdDoctor() error {
