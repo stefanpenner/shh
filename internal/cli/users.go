@@ -42,7 +42,7 @@ func usersListCmd() error {
 
 	var myKey string
 	if priv, err := keyring.GetKey(); err == nil {
-		myKey, _ = keyring.PublicKeyFrom(priv)
+		myKey, _ = crypto.PublicKeyFrom(priv)
 	}
 
 	fmt.Println(headerStyle.Render("Authorized users"))

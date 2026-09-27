@@ -5,6 +5,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 
+	"github.com/stefanpenner/shh/internal/crypto"
 	"github.com/stefanpenner/shh/internal/encfile"
 	"github.com/stefanpenner/shh/internal/envutil"
 	"github.com/stefanpenner/shh/internal/github"
@@ -29,7 +30,7 @@ func RunDoctorChecks(getKeyFn func() (string, error), ghUsernameFn func() string
 		checks = append(checks, DoctorCheck{"age key", false, "no key found (run 'shh init')"})
 	} else {
 		privKey = key
-		pubKey, _ := keyring.PublicKeyFrom(privKey)
+		pubKey, _ := crypto.PublicKeyFrom(privKey)
 		checks = append(checks, DoctorCheck{"age key", true, pubKey})
 	}
 
@@ -58,7 +59,7 @@ func RunDoctorChecks(getKeyFn func() (string, error), ghUsernameFn func() string
 
 		// 5. Recipient check (only if file exists and we have a key)
 		if privKey != "" {
-			pubKey, _ := keyring.PublicKeyFrom(privKey)
+			pubKey, _ := crypto.PublicKeyFrom(privKey)
 			found := false
 			for _, pk := range ef.Recipients {
 				if pk == pubKey {

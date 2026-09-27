@@ -125,7 +125,7 @@ func runLoginIdentityString(identity string) error {
 		return errors.Wrap(err, "keyring store")
 	}
 	fmt.Println(successStyle.Render("Identity stored in OS keyring."))
-	if pub, err := keyring.PublicKeyFrom(identity); err == nil {
+	if pub, err := crypto.PublicKeyFrom(identity); err == nil {
 		fmt.Printf("  key: %s\n", keyStyle.Render(pub))
 	} else {
 		fmt.Println(hintStyle.Render("Hardware/plugin key — add its recipient with: shh users add --name <name> --key age1…"))
@@ -154,7 +154,7 @@ func enrolledRecipient() (string, bool, error) {
 	if err != nil {
 		return "", false, nil
 	}
-	pub, err := keyring.PublicKeyFrom(key)
+	pub, err := crypto.PublicKeyFrom(key)
 	return pub, true, err
 }
 
@@ -270,7 +270,7 @@ func cmdWhoami() error {
 	if err != nil {
 		return errors.New("not logged in (run 'shh init' or 'shh login')")
 	}
-	pubKey, err := keyring.PublicKeyFrom(privKey)
+	pubKey, err := crypto.PublicKeyFrom(privKey)
 	if err != nil {
 		// Plugin identity (YubiKey/Secure Enclave): the recipient isn't derivable
 		// from the identity, and the SSH/X25519 matching below doesn't apply.
