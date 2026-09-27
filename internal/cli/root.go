@@ -42,6 +42,18 @@ func encFile(cmd *cobra.Command, args []string) (string, error) {
 	return envutil.ResolveFileE(name, args)
 }
 
+// encFileAt lets args[at] win. --env is still validated first, so a bad name fails even with a path.
+func encFileAt(cmd *cobra.Command, args []string, at int) (string, error) {
+	file, err := encFile(cmd, nil)
+	if err != nil {
+		return "", err
+	}
+	if at < len(args) {
+		return args[at], nil
+	}
+	return file, nil
+}
+
 // secretValue reads "-" from stdin so the secret never lands in argv.
 func secretValue(value string) (string, error) {
 	if value != "-" {
@@ -52,6 +64,43 @@ func secretValue(value string) (string, error) {
 		return "", errors.Wrap(err, "read value from stdin")
 	}
 	return strings.TrimRight(string(data), "\n"), nil
+}
+
+// runLoginFlags enrolls a passphrase, a QR, or an identity; otherwise GitHub SSH.
+func runLoginFlags(cmd *cobra.Command, args []string) error {
+	if mustBool(cmd, "passphrase") {
+		return runLoginPassphrase()
+	}
+	if qr := mustString(cmd, "qr-file"); qr != "" {
+		return runLoginQRFile(qr)
+	}
+	if id := mustString(cmd, "identity"); id != "" {
+		return runLoginIdentity(id)
+	}
+	return runLogin(cmd, args)
+}
+
+// runUsersAdd grants a GitHub user, an age key, or a named deploy key.
+// --passphrase derives the recipient and requires --name.
+func runUsersAdd(cmd *cobra.Command, args []string) error {
+	name := mustString(cmd, "name")
+	key := mustString(cmd, "key")
+
+	if mustBool(cmd, "passphrase") {
+		if name == "" {
+			return errors.New("--passphrase requires --name (e.g. --name failsafe)")
+		}
+		derived, err := passphraseRecipient()
+		if err != nil {
+			return err
+		}
+		key = derived
+	}
+
+	return usersAddCmd(args, name, key, usersAddOpts{
+		QR:    mustBool(cmd, "qr"),
+		QROut: mustString(cmd, "qr-out"),
+	})
 }
 
 func newRootCmd() *cobra.Command {
@@ -72,18 +121,7 @@ func newRootCmd() *cobra.Command {
 	loginCmd := &cobra.Command{
 		Use:   "login",
 		Short: "Log in (auto-detects SSH key via GitHub, or --identity / --passphrase / --qr-file)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if pass, _ := cmd.Flags().GetBool("passphrase"); pass {
-				return runLoginPassphrase()
-			}
-			if qrFile, _ := cmd.Flags().GetString("qr-file"); qrFile != "" {
-				return runLoginQRFile(qrFile)
-			}
-			if id, _ := cmd.Flags().GetString("identity"); id != "" {
-				return runLoginIdentity(id)
-			}
-			return runLogin(cmd, args)
-		},
+		RunE:  runLoginFlags,
 	}
 	loginCmd.Flags().String("identity", "", "Enroll a provided age identity: a file path or an AGE-SECRET-KEY-… / AGE-PLUGIN-… string (YubiKey, Secure Enclave)")
 	loginCmd.Flags().Bool("passphrase", false, "Derive your key from a passphrase (brain key); prompts, never stored")
@@ -167,13 +205,11 @@ func newRootCmd() *cobra.Command {
 		Short: "Add or update a secret (use - as VALUE to read from stdin)",
 		Args:  cobra.RangeArgs(2, 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			file, err := encFile(cmd, nil)
+			file, err := encFileAt(cmd, args, 2)
 			if err != nil {
 				return err
 			}
-			if len(args) > 2 {
-				file = args[2]
-			}
+
 			value, err := secretValue(args[1])
 			if err != nil {
 				return err
@@ -190,12 +226,9 @@ func newRootCmd() *cobra.Command {
 		Short:   "Remove a secret",
 		Args:    cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			file, err := encFile(cmd, nil)
+			file, err := encFileAt(cmd, args, 1)
 			if err != nil {
 				return err
-			}
-			if len(args) > 1 {
-				file = args[1]
 			}
 			return cmdRm(file, args[0])
 		},
@@ -209,12 +242,9 @@ func newRootCmd() *cobra.Command {
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			quiet, _ := cmd.Flags().GetBool("quiet")
-			file, err := encFile(cmd, nil)
+			file, err := encFileAt(cmd, args, 1)
 			if err != nil {
 				return err
-			}
-			if len(args) > 1 {
-				file = args[1]
 			}
 			return cmdGet(file, args[0], os.Stderr, func() bool {
 				return term.IsTerminal(int(os.Stdout.Fd())) // #nosec G115 -- file descriptors always fit in int
@@ -296,25 +326,7 @@ func newRootCmd() *cobra.Command {
 		Use:   "add [github-username | age-public-key]",
 		Short: "Add a user by GitHub username, age public key, or generate a deploy key",
 		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			name, _ := cmd.Flags().GetString("name")
-			key, _ := cmd.Flags().GetString("key")
-			if pass, _ := cmd.Flags().GetBool("passphrase"); pass {
-				if name == "" {
-					return errors.New("--passphrase requires --name (e.g. --name failsafe)")
-				}
-				k, err := passphraseRecipient()
-				if err != nil {
-					return err
-				}
-				key = k
-			}
-			opts := usersAddOpts{
-				QR:    mustBool(cmd, "qr"),
-				QROut: mustString(cmd, "qr-out"),
-			}
-			return usersAddCmd(args, name, key, opts)
-		},
+		RunE:  runUsersAdd,
 	}
 	addCmd.Flags().String("name", "", "Name for a non-GitHub recipient (e.g. production-deploy)")
 	addCmd.Flags().String("key", "", "Age public key (optional with --name; generated if omitted)")
