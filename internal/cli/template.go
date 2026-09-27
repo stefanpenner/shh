@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/cockroachdb/errors"
 
@@ -53,7 +52,8 @@ func cmdMerge(ancestorPath, oursPath, theirsPath string) error {
 		return err
 	}
 
-	merged, err := mergeSides(ancestor, ours, theirs, privKey)
+	merged, err := encfile.MergeFile(ancestor, ours, theirs, privKey,
+		"shh merge: conflict on keys: %s", "re-encrypt merged secrets")
 	if err != nil {
 		return err
 	}
@@ -78,19 +78,4 @@ func loadMergeSides(ancestorPath, oursPath, theirsPath string) (*encfile.Encrypt
 		return nil, nil, nil, errors.Wrap(err, "load theirs")
 	}
 	return ancestor, ours, theirs, nil
-}
-
-func mergeSides(ancestor, ours, theirs *encfile.EncryptedFile, privKey string) (*encfile.EncryptedFile, error) {
-	secrets, recipients, conflicts, err := encfile.MergeSides(ancestor, ours, theirs, privKey)
-	if len(conflicts) > 0 {
-		return nil, errors.Newf("shh merge: conflict on keys: %s", strings.Join(conflicts, ", "))
-	}
-	if err != nil {
-		return nil, err
-	}
-	ef, err := encfile.EncryptSecrets(secrets, recipients)
-	if err != nil {
-		return nil, errors.Wrap(err, "re-encrypt merged secrets")
-	}
-	return ef, nil
 }
