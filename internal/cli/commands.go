@@ -67,11 +67,7 @@ func cmdEncrypt(src string) error {
 }
 
 func cmdList(file string) error {
-	privKey, err := keyring.GetKey()
-	if err != nil {
-		return err
-	}
-	secrets, err := encfile.LoadSecrets(file, privKey)
+	secrets, err := unlocked(file)
 	if err != nil {
 		return err
 	}
@@ -85,11 +81,7 @@ func cmdEnv(file string, stdout bool, stderr io.Writer) error {
 	if !stdout {
 		return errors.New("refusing to write secrets to stdout; pass --stdout to confirm (e.g. eval $(shh env --stdout))")
 	}
-	privKey, err := keyring.GetKey()
-	if err != nil {
-		return err
-	}
-	secrets, err := encfile.LoadSecrets(file, privKey)
+	secrets, err := unlocked(file)
 	if err != nil {
 		return err
 	}
@@ -193,11 +185,7 @@ func cmdRm(file, key string) error {
 }
 
 func cmdGet(file, key string, stderr io.Writer, checkTTY func() bool, quiet bool) error {
-	privKey, err := keyring.GetKey()
-	if err != nil {
-		return err
-	}
-	secrets, err := encfile.LoadSecrets(file, privKey)
+	secrets, err := unlocked(file)
 	if err != nil {
 		return err
 	}
@@ -247,6 +235,14 @@ func openOrCreate(file, privKey string) (map[string]string, map[string]string, e
 		return nil, nil, err
 	}
 	return make(map[string]string), recipients, nil
+}
+
+func unlocked(file string) (map[string]string, error) {
+	privKey, err := keyring.GetKey()
+	if err != nil {
+		return nil, err
+	}
+	return encfile.LoadSecrets(file, privKey)
 }
 
 func openExisting(file, privKey string) (map[string]string, map[string]string, error) {
