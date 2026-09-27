@@ -150,16 +150,19 @@ func loadOrCreateEnc(file, privKey string) (*encfile.EncryptedFile, error) {
 }
 
 func rewrapAndSave(file string, ef *encfile.EncryptedFile, name, newKey, privKey string) error {
-	newRecipients := make(map[string]string, len(ef.Recipients)+1)
-	for k, v := range ef.Recipients {
-		newRecipients[k] = v
-	}
-	newRecipients[name] = newKey
-
-	if err := encfile.ReWrapDataKey(ef, newRecipients, privKey); err != nil {
+	if err := encfile.ReWrapDataKey(ef, withRecipient(ef.Recipients, name, newKey), privKey); err != nil {
 		return err
 	}
 	return encfile.Save(file, ef)
+}
+
+func withRecipient(recipients map[string]string, name, key string) map[string]string {
+	out := make(map[string]string, len(recipients)+1)
+	for k, v := range recipients {
+		out[k] = v
+	}
+	out[name] = key
+	return out
 }
 
 // emitRecoveryQR writes a PNG and/or terminal hint for a minted identity.
