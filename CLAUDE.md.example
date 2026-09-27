@@ -1,33 +1,28 @@
-# Secrets Management (shh)
+# Secrets (shh)
 
-This project uses [shh](https://github.com/stefanpenner/shh) for encrypted secrets.
-Secrets are stored in `.env.enc` (age-encrypted TOML, safe to commit).
+This project stores secrets in `.env.enc`. Commit that file. Do not commit a plaintext `.env` file.
 
-## Quick reference
+## Commands
 
-- `shh login` — Set up your key (first time)
-- `shh set KEY value` — Add/update a secret (`shh set KEY -` to read from stdin)
-- `shh rm KEY` — Remove a secret
-- `shh list` — Show secret names (no values)
-- `shh edit` — Edit all secrets in $EDITOR
-- `shh run -- <cmd>` — Run a command with secrets injected
-- `shh shell` — Interactive shell with secrets loaded
-- `shh env` — Print export statements
-- `shh users add <github-username>` — Grant access to a teammate
-- `shh users remove <user>` — Revoke access (rotates data key)
-- `shh doctor` — Health check
+- `shh login` stores your key in the OS keyring.
+- `shh set KEY -` reads a value from stdin.
+- `shh rm KEY` removes one name.
+- `shh list` shows names.
+- `shh edit` opens the values in `$EDITOR`.
+- `shh run -- CMD` starts a command with the values in the environment.
+- `shh shell` starts a shell with the values.
+- `shh env --stdout` prints export lines. Do not omit `--stdout`.
+- `shh users add NAME` adds a recipient.
+- `shh users remove NAME` rotates the data key.
+- `shh doctor` checks the local setup. It does not check the MAC.
 
 ## Rules
 
-- NEVER commit plaintext `.env` files
-- NEVER log, print, or echo secret values
-- Use `shh set KEY -` (stdin) instead of `shh set KEY value` to avoid exposing values in shell history / `ps`
-- When adding env vars to code, use `shh set` — do not edit `.env.enc` by hand
-- After `shh users remove`, the data key is rotated — all secrets are re-encrypted
-- CI uses `SHH_AGE_KEY` env var (deploy key) — never print or log it
-
-## Multiple environments
-
-- Default: `.env.enc`
-- `shh -e staging set KEY value` uses `staging.env.enc`
-- `shh -e production set KEY value` uses `production.env.enc`
+- Do not log a secret value.
+- Do not print a secret value.
+- Do not pass a secret as a command argument. Use `shh set KEY -`.
+- Do not edit `.env.enc` by hand.
+- After `shh users remove` of an extractable key, change the secret values at the provider. Rotation does not change those values.
+- Do not print `SHH_AGE_KEY`.
+- `-e NAME` selects `NAME.env.enc`. The default file is `.env.enc`.
+- If git reports a conflict in `.env.enc`, read `shh users list` before you commit. The merge can add or remove a recipient.
