@@ -178,32 +178,33 @@ func readSSHAge(path string) (string, string, error) {
 
 // sshMatch is the first local SSH key whose age recipient is listed.
 func sshMatch(recipients map[string]string) (string, string, string, bool) {
+	return firstSSH(func(pub string) bool {
+		for _, rk := range recipients {
+			if rk == pub {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// sshPathFor is the local SSH key that derives pub.
+func sshPathFor(pubKey string) string {
+	_, _, path, _ := firstSSH(func(pub string) bool { return pub == pubKey })
+	return path
+}
+
+func firstSSH(match func(pub string) bool) (string, string, string, bool) {
 	for _, path := range sshkeys.FindEd25519Keys() {
 		priv, pub, err := readSSHAge(path)
 		if err != nil {
 			continue
 		}
-		for _, rk := range recipients {
-			if rk == pub {
-				return priv, pub, path, true
-			}
+		if match(pub) {
+			return priv, pub, path, true
 		}
 	}
 	return "", "", "", false
-}
-
-// sshPathFor is the local SSH key that derives pub.
-func sshPathFor(pubKey string) string {
-	for _, path := range sshkeys.FindEd25519Keys() {
-		_, pub, err := readSSHAge(path)
-		if err != nil {
-			continue
-		}
-		if pub == pubKey {
-			return path
-		}
-	}
-	return ""
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
