@@ -65,17 +65,25 @@ func cmdMerge(ancestorPath, oursPath, theirsPath string) error {
 }
 
 func loadMergeSides(ancestorPath, oursPath, theirsPath string) (*encfile.EncryptedFile, *encfile.EncryptedFile, *encfile.EncryptedFile, error) {
-	ancestor, err := loadEncryptedFile(ancestorPath)
+	ancestor, err := loadSide(ancestorPath, "ancestor")
 	if err != nil {
-		return nil, nil, nil, errors.Wrap(err, "load ancestor")
+		return nil, nil, nil, err
 	}
-	ours, err := loadEncryptedFile(oursPath)
+	ours, err := loadSide(oursPath, "ours")
 	if err != nil {
-		return nil, nil, nil, errors.Wrap(err, "load ours")
+		return nil, nil, nil, err
 	}
-	theirs, err := loadEncryptedFile(theirsPath)
+	theirs, err := loadSide(theirsPath, "theirs")
 	if err != nil {
-		return nil, nil, nil, errors.Wrap(err, "load theirs")
+		return nil, nil, nil, err
 	}
 	return ancestor, ours, theirs, nil
+}
+
+func loadSide(path, label string) (*encfile.EncryptedFile, error) {
+	ef, err := loadEncryptedFile(path)
+	if err != nil {
+		return nil, errors.Wrap(err, "load "+label)
+	}
+	return ef, nil
 }
