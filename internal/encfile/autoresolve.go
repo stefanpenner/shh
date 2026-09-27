@@ -59,17 +59,17 @@ func MergeFile(ancestor, ours, theirs *EncryptedFile, privateKey, conflictFmt, e
 }
 
 func decryptAndMerge(ancestor, ours, theirs *EncryptedFile, privateKey string) (map[string]string, map[string]string, []string, error) {
-	ancestorSecrets, err := DecryptSecrets(ancestor, privateKey)
+	ancestorSecrets, err := decryptSide(ancestor, privateKey, "ancestor")
 	if err != nil {
-		return nil, nil, nil, errors.Wrap(err, "decrypt ancestor")
+		return nil, nil, nil, err
 	}
-	oursSecrets, err := DecryptSecrets(ours, privateKey)
+	oursSecrets, err := decryptSide(ours, privateKey, "ours")
 	if err != nil {
-		return nil, nil, nil, errors.Wrap(err, "decrypt ours")
+		return nil, nil, nil, err
 	}
-	theirsSecrets, err := DecryptSecrets(theirs, privateKey)
+	theirsSecrets, err := decryptSide(theirs, privateKey, "theirs")
 	if err != nil {
-		return nil, nil, nil, errors.Wrap(err, "decrypt theirs")
+		return nil, nil, nil, err
 	}
 
 	mergedSecrets, conflicts, err := merge.MergeSecrets(ancestorSecrets, oursSecrets, theirsSecrets)
@@ -77,6 +77,14 @@ func decryptAndMerge(ancestor, ours, theirs *EncryptedFile, privateKey string) (
 		return nil, nil, conflicts, err
 	}
 	return mergedSecrets, merge.MergeStringMaps(ancestor.Recipients, ours.Recipients, theirs.Recipients), nil, nil
+}
+
+func decryptSide(ef *EncryptedFile, privateKey, label string) (map[string]string, error) {
+	secrets, err := DecryptSecrets(ef, privateKey)
+	if err != nil {
+		return nil, errors.Wrap(err, "decrypt "+label)
+	}
+	return secrets, nil
 }
 
 func encDir(path string) (dir, base string) {
