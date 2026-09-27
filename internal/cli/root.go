@@ -33,6 +33,27 @@ func mustString(cmd *cobra.Command, name string) string {
 	return v
 }
 
+func envFlag(cmd *cobra.Command) {
+	cmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
+}
+
+func encFile(cmd *cobra.Command, args []string) (string, error) {
+	name, _ := cmd.Flags().GetString("env")
+	return envutil.ResolveFileE(name, args)
+}
+
+// secretValue reads "-" from stdin so the secret never lands in argv.
+func secretValue(value string) (string, error) {
+	if value != "-" {
+		return value, nil
+	}
+	data, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return "", errors.Wrap(err, "read value from stdin")
+	}
+	return strings.TrimRight(string(data), "\n"), nil
+}
+
 func newRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:           "shh",
@@ -41,7 +62,6 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 
-	// init command
 	initCmd := &cobra.Command{
 		Use:   "init",
 		Short: "Generate age key and store in OS keyring",
@@ -49,7 +69,6 @@ func newRootCmd() *cobra.Command {
 	}
 	rootCmd.AddCommand(initCmd)
 
-	// login command
 	loginCmd := &cobra.Command{
 		Use:   "login",
 		Short: "Log in (auto-detects SSH key via GitHub, or --identity / --passphrase / --qr-file)",
@@ -71,7 +90,6 @@ func newRootCmd() *cobra.Command {
 	loginCmd.Flags().String("qr-file", "", "Enroll from a QR image (PNG/JPEG) containing AGE-SECRET-KEY-… (paper recovery)")
 	rootCmd.AddCommand(loginCmd)
 
-	// whoami command
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "whoami",
 		Short: "Show your public key and recipient name",
@@ -80,7 +98,6 @@ func newRootCmd() *cobra.Command {
 		},
 	})
 
-	// logout command
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "logout",
 		Short: "Remove age key from OS keyring",
@@ -89,7 +106,6 @@ func newRootCmd() *cobra.Command {
 		},
 	})
 
-	// encrypt command
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "encrypt <file>",
 		Short: "Encrypt a .env file",
@@ -99,97 +115,82 @@ func newRootCmd() *cobra.Command {
 		},
 	})
 
-	// list command
 	listCmd := &cobra.Command{
 		Use:   "list [file]",
 		Short: "List secret keys (names only, no values)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env, _ := cmd.Flags().GetString("env")
-			file, err := envutil.ResolveFileE(env, args)
+			file, err := encFile(cmd, args)
 			if err != nil {
 				return err
 			}
 			return cmdList(file)
 		},
 	}
-	listCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
+	envFlag(listCmd)
 	rootCmd.AddCommand(listCmd)
 
-	// env command
 	envCmd := &cobra.Command{
 		Use:   "env [file]",
 		Short: "Print secrets as export statements (requires --stdout)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env, _ := cmd.Flags().GetString("env")
 			stdout, _ := cmd.Flags().GetBool("stdout")
-			file, err := envutil.ResolveFileE(env, args)
+			file, err := encFile(cmd, args)
 			if err != nil {
 				return err
 			}
 			return cmdEnv(file, stdout, os.Stderr)
 		},
 	}
-	envCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
+	envFlag(envCmd)
 	envCmd.Flags().Bool("stdout", false, "Write secrets to stdout (required; secrets are not printed without it)")
 	rootCmd.AddCommand(envCmd)
 
-	// edit command
 	editCmd := &cobra.Command{
 		Use:   "edit [file]",
 		Short: "Edit secrets in $EDITOR",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env, _ := cmd.Flags().GetString("env")
-			file, err := envutil.ResolveFileE(env, args)
+			file, err := encFile(cmd, args)
 			if err != nil {
 				return err
 			}
 			return cmdEdit(file)
 		},
 	}
-	editCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
+	envFlag(editCmd)
 	rootCmd.AddCommand(editCmd)
 
-	// set command
 	setCmd := &cobra.Command{
 		Use:   "set <KEY> <VALUE|--> [file]",
 		Short: "Add or update a secret (use - as VALUE to read from stdin)",
 		Args:  cobra.RangeArgs(2, 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env, _ := cmd.Flags().GetString("env")
-			file, err := envutil.ResolveFileE(env, nil)
+			file, err := encFile(cmd, nil)
 			if err != nil {
 				return err
 			}
 			if len(args) > 2 {
 				file = args[2]
 			}
-			value := args[1]
-			if value == "-" {
-				// Read value from stdin to avoid secret exposure in process args / ps output.
-				data, err := io.ReadAll(os.Stdin)
-				if err != nil {
-					return errors.Wrap(err, "read value from stdin")
-				}
-				value = strings.TrimRight(string(data), "\n")
+			value, err := secretValue(args[1])
+			if err != nil {
+				return err
 			}
 			return cmdSet(file, args[0], value)
 		},
 	}
-	setCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
+	envFlag(setCmd)
 	rootCmd.AddCommand(setCmd)
 
-	// rm command
 	rmCmd := &cobra.Command{
 		Use:     "rm <KEY> [file]",
 		Aliases: []string{"unset"},
 		Short:   "Remove a secret",
 		Args:    cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env, _ := cmd.Flags().GetString("env")
-			file, err := envutil.ResolveFileE(env, nil)
+			file, err := encFile(cmd, nil)
 			if err != nil {
 				return err
 			}
@@ -199,18 +200,16 @@ func newRootCmd() *cobra.Command {
 			return cmdRm(file, args[0])
 		},
 	}
-	rmCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
+	envFlag(rmCmd)
 	rootCmd.AddCommand(rmCmd)
 
-	// get command
 	getCmd := &cobra.Command{
 		Use:   "get <KEY> [file]",
 		Short: "Print a single secret value",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env, _ := cmd.Flags().GetString("env")
 			quiet, _ := cmd.Flags().GetBool("quiet")
-			file, err := envutil.ResolveFileE(env, nil)
+			file, err := encFile(cmd, nil)
 			if err != nil {
 				return err
 			}
@@ -222,29 +221,26 @@ func newRootCmd() *cobra.Command {
 			}, quiet)
 		},
 	}
-	getCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
+	envFlag(getCmd)
 	getCmd.Flags().BoolP("quiet", "q", false, "Suppress non-TTY warning")
 	rootCmd.AddCommand(getCmd)
 
-	// shell command
 	shellCmd := &cobra.Command{
 		Use:     "shell [file]",
 		Aliases: []string{"sh"},
 		Short:   "Start a subshell with secrets loaded",
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env, _ := cmd.Flags().GetString("env")
-			file, err := envutil.ResolveFileE(env, args)
+			file, err := encFile(cmd, args)
 			if err != nil {
 				return err
 			}
 			return cmdShell(file)
 		},
 	}
-	shellCmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
+	envFlag(shellCmd)
 	rootCmd.AddCommand(shellCmd)
 
-	// run command
 	runCmd := &cobra.Command{
 		Use:                "run [file] -- <command> [args...]",
 		Short:              "Run a command with secrets in the environment",
@@ -260,7 +256,6 @@ func newRootCmd() *cobra.Command {
 	}
 	rootCmd.AddCommand(runCmd)
 
-	// doctor command
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "doctor",
 		Short: "Check your shh setup for common issues",
@@ -270,7 +265,6 @@ func newRootCmd() *cobra.Command {
 		},
 	})
 
-	// merge driver command (for git)
 	rootCmd.AddCommand(&cobra.Command{
 		Use:    "merge <ancestor> <ours> <theirs>",
 		Short:  "Git merge driver for .env.enc files",
@@ -281,7 +275,6 @@ func newRootCmd() *cobra.Command {
 		},
 	})
 
-	// users command with subcommands
 	usersCmd := &cobra.Command{
 		Use:   "users",
 		Short: "Manage authorized users",
@@ -342,7 +335,6 @@ func newRootCmd() *cobra.Command {
 
 	rootCmd.AddCommand(usersCmd)
 
-	// template command
 	templateCmd := &cobra.Command{
 		Use:   "template <file> [env-file]",
 		Short: "Render a template with secrets substituted",
