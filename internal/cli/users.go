@@ -207,8 +207,6 @@ func emitRecoveryQR(secret string, opts usersAddOpts) error {
 }
 
 func usersRemoveCmd(args []string) error {
-	target := args[0]
-
 	file := envutil.FindEncFile()
 	ef, err := loadEncryptedFile(file)
 	if err != nil {
@@ -220,65 +218,23 @@ func usersRemoveCmd(args []string) error {
 		return err
 	}
 
-	// Resolve number to key
-	names := envutil.SortedKeys(ef.Recipients)
-	if n, err := strconv.Atoi(target); err == nil {
-		if n < 1 || n > len(names) {
-			return errors.Newf("invalid key number: %d", n)
-		}
-		target = ef.Recipients[names[n-1]]
+	removedName, target, err := recipientToRemove(ef.Recipients, args[0])
+	if err != nil {
+		return err
 	}
-
-	// Find and remove the key
-	// Collect all candidates: first try exact match (pk or full name), then display name.
-	var exactMatches []string
-	var displayMatches []string
-	for name, pk := range ef.Recipients {
-		if pk == target || name == target {
-			exactMatches = append(exactMatches, name)
-		} else if RecipientDisplayName(name) == target {
-			displayMatches = append(displayMatches, name)
-		}
-	}
-
-	// Prefer exact matches; fall back to display-name matches only when unambiguous.
-	var candidates []string
-	switch {
-	case len(exactMatches) > 0:
-		candidates = exactMatches
-	case len(displayMatches) == 1:
-		candidates = displayMatches
-	case len(displayMatches) > 1:
-		return errors.Newf("ambiguous match for %q: multiple recipients share that display name; use the full name (e.g. https://github.com/user) or public key instead", target)
-	}
-
-	if len(candidates) == 0 {
-		return errors.Newf("key not found: %s", target)
-	}
-
-	removedName := candidates[0]
-	newRecipients := make(map[string]string)
-	for name, pk := range ef.Recipients {
-		if name != removedName {
-			newRecipients[name] = pk
-		}
-	}
-
+	newRecipients := withoutRecipient(ef.Recipients, removedName)
 	if len(newRecipients) == 0 {
 		return errors.New("cannot remove the last key")
 	}
 
-	// Decrypt all secrets, then re-encrypt with a fresh data key.
 	secrets, err := encfile.DecryptSecrets(ef, privKey)
 	if err != nil {
 		return err
 	}
-
 	newEf, err := encfile.EncryptSecrets(secrets, newRecipients)
 	if err != nil {
 		return err
 	}
-
 	if err := encfile.Save(file, newEf); err != nil {
 		return err
 	}
@@ -286,4 +242,47 @@ func usersRemoveCmd(args []string) error {
 	fmt.Println(successStyle.Render(fmt.Sprintf("Removed key: %s (%s)", removedName, target)))
 	fmt.Println(hintStyle.Render("Data key rotated — all secrets re-encrypted."))
 	return nil
+}
+
+func recipientToRemove(recipients map[string]string, target string) (name, shown string, err error) {
+	names := envutil.SortedKeys(recipients)
+	if n, convErr := strconv.Atoi(target); convErr == nil {
+		if n < 1 || n > len(names) {
+			return "", "", errors.Newf("invalid key number: %d", n)
+		}
+		target = recipients[names[n-1]]
+	}
+
+	var exact, display []string
+	for recipientName, pk := range recipients {
+		if pk == target || recipientName == target {
+			exact = append(exact, recipientName)
+		} else if RecipientDisplayName(recipientName) == target {
+			display = append(display, recipientName)
+		}
+	}
+
+	var candidates []string
+	switch {
+	case len(exact) > 0:
+		candidates = exact
+	case len(display) == 1:
+		candidates = display
+	case len(display) > 1:
+		return "", "", errors.Newf("ambiguous match for %q: multiple recipients share that display name; use the full name (e.g. https://github.com/user) or public key instead", target)
+	}
+	if len(candidates) == 0 {
+		return "", "", errors.Newf("key not found: %s", target)
+	}
+	return candidates[0], target, nil
+}
+
+func withoutRecipient(recipients map[string]string, removedName string) map[string]string {
+	kept := make(map[string]string)
+	for name, pk := range recipients {
+		if name != removedName {
+			kept[name] = pk
+		}
+	}
+	return kept
 }
