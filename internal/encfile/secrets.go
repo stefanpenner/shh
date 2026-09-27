@@ -26,15 +26,8 @@ func verifyMAC(ef *EncryptedFile, dataKey []byte) error {
 }
 
 func EncryptSecrets(secrets map[string]string, recipients map[string]string) (*EncryptedFile, error) {
-	if len(recipients) == 0 {
-		return nil, errors.New("at least one recipient is required")
-	}
-	// Fail closed before any plugin/X25519 wrap: untrusted maps may carry
-	// disallowed plugin recipients (same gate as Load/normalize).
-	for name, rec := range recipients {
-		if err := crypto.EnsureRecipientAllowed(rec); err != nil {
-			return nil, errors.Wrapf(err, "recipient %q", name)
-		}
+	if err := gateRecipients(recipients); err != nil {
+		return nil, err
 	}
 
 	dataKey, err := crypto.GenerateDataKey()
@@ -148,13 +141,8 @@ func DecryptSecrets(ef *EncryptedFile, privateKey string) (map[string]string, er
 
 // ReWrapDataKey re-wraps the data key for a new set of recipients using the provided private key.
 func ReWrapDataKey(ef *EncryptedFile, newRecipients map[string]string, privateKey string) error {
-	if len(newRecipients) == 0 {
-		return errors.New("at least one recipient is required")
-	}
-	for name, rec := range newRecipients {
-		if err := crypto.EnsureRecipientAllowed(rec); err != nil {
-			return errors.Wrapf(err, "recipient %q", name)
-		}
+	if err := gateRecipients(newRecipients); err != nil {
+		return err
 	}
 
 	// Unwrap with the current identity — handles X25519 and plugin identities
@@ -183,6 +171,20 @@ func ReWrapDataKey(ef *EncryptedFile, newRecipients map[string]string, privateKe
 	ef.Recipients = newRecipients
 	ef.Version = crypto.FileVersion
 	ef.MAC = crypto.ComputeMAC(dataKey, ef.Version, ef.WrappedKeys, ef.Recipients, ef.Secrets)
+	return nil
+}
+
+// gateRecipients fails closed before any wrap. An empty set is rejected, and a
+// disallowed plugin recipient never reaches age's plugin exec.
+func gateRecipients(recipients map[string]string) error {
+	if len(recipients) == 0 {
+		return errors.New("at least one recipient is required")
+	}
+	for name, rec := range recipients {
+		if err := crypto.EnsureRecipientAllowed(rec); err != nil {
+			return errors.Wrapf(err, "recipient %q", name)
+		}
+	}
 	return nil
 }
 
