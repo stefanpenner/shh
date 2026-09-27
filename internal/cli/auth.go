@@ -163,6 +163,49 @@ func showStoredKey(lead, pub string) {
 	fmt.Printf("  %s\n", keyStyle.Render(pub))
 }
 
+// readSSHAge reads an ed25519 private key and returns its age identity.
+func readSSHAge(path string) (string, string, error) {
+	data, err := os.ReadFile(path) // #nosec G304 -- path from FindEd25519Keys, restricted to ~/.ssh/
+	if err != nil {
+		return "", "", errors.Wrap(err, "read SSH key")
+	}
+	priv, pub, err := sshkeys.ToAge(data, path)
+	if err != nil {
+		return "", "", errors.Wrap(err, "ssh-to-age")
+	}
+	return *priv, *pub, nil
+}
+
+// sshMatch is the first local SSH key whose age recipient is listed.
+func sshMatch(recipients map[string]string) (string, string, string, bool) {
+	for _, path := range sshkeys.FindEd25519Keys() {
+		priv, pub, err := readSSHAge(path)
+		if err != nil {
+			continue
+		}
+		for _, rk := range recipients {
+			if rk == pub {
+				return priv, pub, path, true
+			}
+		}
+	}
+	return "", "", "", false
+}
+
+// sshPathFor is the local SSH key that derives pub.
+func sshPathFor(pubKey string) string {
+	for _, path := range sshkeys.FindEd25519Keys() {
+		_, pub, err := readSSHAge(path)
+		if err != nil {
+			continue
+		}
+		if pub == pubKey {
+			return path
+		}
+	}
+	return ""
+}
+
 func runInit(cmd *cobra.Command, args []string) error {
 	pub, present, err := enrolledRecipient()
 	if err != nil {
@@ -180,22 +223,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 	fmt.Printf("GitHub user: %s\n", nameStyle.Render(username))
 
 	var privateKey, publicKey string
-
-	// Try to find an ed25519 SSH key to derive from
-	sshKeyPaths := sshkeys.FindEd25519Keys()
-	if len(sshKeyPaths) > 0 {
-		sshKey := sshKeyPaths[0]
-		sshKeyData, err := os.ReadFile(sshKey) // #nosec G304
+	if paths := sshkeys.FindEd25519Keys(); len(paths) > 0 {
+		privateKey, publicKey, err = readSSHAge(paths[0])
 		if err != nil {
-			return errors.Wrap(err, "read SSH key")
+			return err
 		}
-		privKeyPtr, pubKeyPtr, err := sshkeys.ToAge(sshKeyData, sshKey)
-		if err != nil {
-			return errors.Wrap(err, "ssh-to-age")
-		}
-		privateKey = *privKeyPtr
-		publicKey = *pubKeyPtr
-		fmt.Printf("Using SSH key: %s\n", hintStyle.Render(sshKey))
+		fmt.Printf("Using SSH key: %s\n", hintStyle.Render(paths[0]))
 	} else {
 		identity, err := age.GenerateX25519Identity()
 		if err != nil {
@@ -232,30 +265,19 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("GitHub user: %s\n", nameStyle.Render(username))
 
-	// Load recipients from .env.enc if it exists
 	var recipients map[string]string
 	if ef, err := loadEncryptedFile(envutil.FindEncFile()); err == nil {
 		recipients = ef.Recipients
 	}
 
-	// Find local SSH keys and try to match against recipients
-	for _, sshPath := range sshkeys.FindEd25519Keys() {
-		data, _ := os.ReadFile(sshPath) // #nosec G304 -- path from FindEd25519Keys, restricted to ~/.ssh/
-		privPtr, pubPtr, err := sshkeys.ToAge(data, sshPath)
-		if err != nil {
-			continue
+	if priv, pub, path, ok := sshMatch(recipients); ok {
+		if err := keyring.StoreKey(priv); err != nil {
+			return errors.Wrap(err, "keyring store")
 		}
-		for _, rk := range recipients { // ranging over nil map is safe (no iterations)
-			if rk == *pubPtr {
-				if err := keyring.StoreKey(*privPtr); err != nil {
-					return errors.Wrap(err, "keyring store")
-				}
-				fmt.Printf("Matched SSH key %s\n", hintStyle.Render(sshPath))
-				fmt.Println(successStyle.Render("Key stored in OS keyring."))
-				fmt.Printf("  %s\n", keyStyle.Render(*pubPtr))
-				return nil
-			}
-		}
+		fmt.Printf("Matched SSH key %s\n", hintStyle.Render(path))
+		fmt.Println(successStyle.Render("Key stored in OS keyring."))
+		fmt.Printf("  %s\n", keyStyle.Render(pub))
+		return nil
 	}
 
 	if recipients != nil {
@@ -280,7 +302,6 @@ func cmdWhoami() error {
 
 	fmt.Printf("  key: %s\n", keyStyle.Render(pubKey))
 
-	// Check if we're in a project's recipients list
 	if ef, err := loadEncryptedFile(envutil.FindEncFile()); err == nil {
 		for name, pk := range ef.Recipients {
 			if pk == pubKey {
@@ -290,22 +311,9 @@ func cmdWhoami() error {
 		}
 	}
 
-	// Check which SSH key this corresponds to
-	for _, sshPath := range sshkeys.FindEd25519Keys() {
-		data, err := os.ReadFile(sshPath) // #nosec G304 -- path from FindEd25519Keys, restricted to ~/.ssh/
-		if err != nil {
-			continue
-		}
-		_, pubPtr, err := sshkeys.ToAge(data, sshPath)
-		if err != nil {
-			continue
-		}
-		if *pubPtr == pubKey {
-			fmt.Printf("  ssh: %s\n", hintStyle.Render(sshPath))
-			break
-		}
+	if path := sshPathFor(pubKey); path != "" {
+		fmt.Printf("  ssh: %s\n", hintStyle.Render(path))
 	}
-
 	return nil
 }
 
