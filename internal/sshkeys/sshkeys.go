@@ -68,24 +68,23 @@ func FindEd25519Keys() []string {
 		}
 		path := filepath.Join(sshDir, e.Name())
 		data, err := os.ReadFile(path) // #nosec G304 G703 -- path is filepath.Join of a fixed dir and a ReadDir entry name
-		if err != nil {
+		if err != nil || !bytes.Contains(data, []byte("OPENSSH PRIVATE KEY")) {
 			continue
 		}
-		// Quick check for SSH private key marker
-		if !bytes.Contains(data, []byte("OPENSSH PRIVATE KEY")) {
-			continue
-		}
-		// Try to convert — ssh-to-age will reject non-ed25519
-		if _, _, err := sshtoa.SSHPrivateKeyToAge(data, nil); err == nil {
-			keys = append(keys, path)
-			continue
-		}
-		// If passphrase-protected, include it — we'll confirm type at conversion time
-		_, err = ssh.ParseRawPrivateKey(data)
-		var missingErr *ssh.PassphraseMissingError
-		if errors.As(err, &missingErr) {
+		if ed25519Key(data) {
 			keys = append(keys, path)
 		}
 	}
 	return keys
+}
+
+// ed25519Key is a clear ed25519 key, or a passphrase-locked OpenSSH key.
+// Locked keys are checked for real in ToAge.
+func ed25519Key(data []byte) bool {
+	if _, _, err := sshtoa.SSHPrivateKeyToAge(data, nil); err == nil {
+		return true
+	}
+	_, err := ssh.ParseRawPrivateKey(data)
+	var missing *ssh.PassphraseMissingError
+	return errors.As(err, &missing)
 }

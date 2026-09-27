@@ -33,12 +33,6 @@ func StoreKey(privateKey string) error {
 	return gokeyring.Set(keychainService, envutil.CurrentUsername(), privateKey)
 }
 
-// PublicKeyFrom derives the public key from an age private key string.
-// Delegates to crypto.PublicKeyFrom.
-func PublicKeyFrom(privateKey string) (string, error) {
-	return crypto.PublicKeyFrom(privateKey)
-}
-
 func DeleteKey() error {
 	return gokeyring.Delete(keychainService, envutil.CurrentUsername())
 }

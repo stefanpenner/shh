@@ -180,7 +180,7 @@ func TestUsersAddWithNameGeneratesKey(t *testing.T) {
 	require.NoError(t, encfile.Save(".env.enc", ef))
 
 	// Add a deploy key with --name (no --key, should generate)
-	err = usersAddCmd(nil, "production-deploy", "", usersAddOpts{})
+	err = usersAddCmd(nil, "production-deploy", "", "", false)
 	require.NoError(t, err)
 
 	// Verify the recipient was added with shh-user:// prefix
@@ -210,7 +210,7 @@ func TestUsersAddWithNameAndKey(t *testing.T) {
 	require.NoError(t, encfile.Save(".env.enc", ef))
 
 	// Add with --name and --key
-	err = usersAddCmd(nil, "staging-deploy", pub2, usersAddOpts{})
+	err = usersAddCmd(nil, "staging-deploy", pub2, "", false)
 	require.NoError(t, err)
 
 	loaded, err := encfile.Load(".env.enc")
@@ -250,7 +250,7 @@ func TestUsersRemoveByDisplayNameAmbiguous(t *testing.T) {
 
 func TestUsersAddWithNameRequiresName(t *testing.T) {
 	// No positional arg, no --name → error
-	err := usersAddCmd(nil, "", "", usersAddOpts{})
+	err := usersAddCmd(nil, "", "", "", false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "--name")
 }
@@ -268,7 +268,7 @@ func TestUsersAddWithNameRejectsInvalidName(t *testing.T) {
 		"has/slash",      // slashes not allowed
 	}
 	for _, name := range invalidNames {
-		err := usersAddCmd(nil, name, "", usersAddOpts{})
+		err := usersAddCmd(nil, name, "", "", false)
 		assert.Error(t, err, "expected error for deploy name %q", name)
 	}
 }
@@ -289,7 +289,7 @@ func TestUsersAddWithNameDuplicate(t *testing.T) {
 	require.NoError(t, encfile.Save(".env.enc", ef))
 
 	// Adding the same name again should fail
-	err = usersAddCmd(nil, "production-deploy", "", usersAddOpts{})
+	err = usersAddCmd(nil, "production-deploy", "", "", false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "already in use")
 }

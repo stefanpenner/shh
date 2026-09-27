@@ -34,7 +34,7 @@ func TestRecoveryQR_E2E_RoundTrip(t *testing.T) {
 	require.NoError(t, encfile.Save(".env.enc", ef))
 
 	qrPath := filepath.Join(t.TempDir(), "recovery.png")
-	require.NoError(t, usersAddCmd(nil, "recovery", "", usersAddOpts{QROut: qrPath}))
+	require.NoError(t, usersAddCmd(nil, "recovery", "", qrPath, false))
 
 	loaded, err := encfile.Load(".env.enc")
 	require.NoError(t, err)
@@ -118,7 +118,7 @@ func TestUsersAddQR_RejectsWhenKeyProvided(t *testing.T) {
 
 	_, otherPub := generateTestKey(t)
 	// --key provided: no secret generated → QR note, no panic
-	err = usersAddCmd(nil, "other", otherPub, usersAddOpts{QR: true, QROut: filepath.Join(t.TempDir(), "x.png")})
+	err = usersAddCmd(nil, "other", otherPub, filepath.Join(t.TempDir(), "x.png"), true)
 	require.NoError(t, err)
 }
 

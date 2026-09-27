@@ -25,7 +25,14 @@ func allowedPlugins() map[string]bool {
 	return allowed
 }
 
-func pluginAllowed(name string) bool { return allowedPlugins()[name] }
+// requireAllowedPlugin is the only allowlist gate. NewRecipient and NewIdentity
+// exec age-plugin-<name>, so a plugin name must pass here before either call.
+func requireAllowedPlugin(name string) error {
+	if allowedPlugins()[name] {
+		return nil
+	}
+	return errors.Newf("age plugin %q is not allowed (set SHH_ALLOWED_AGE_PLUGINS to permit it)", name)
+}
 
 // EnsureRecipientAllowed errors only when s is a well-formed plugin recipient for
 // a plugin that is not on the allowlist. Malformed or X25519 recipients pass —
@@ -33,8 +40,8 @@ func pluginAllowed(name string) bool { return allowedPlugins()[name] }
 // solely to stop a disallowed plugin name (from an untrusted file) reaching age's
 // plugin exec; use it at load time without rejecting otherwise-handled inputs.
 func EnsureRecipientAllowed(s string) error {
-	if name, _, err := plugin.ParseRecipient(s); err == nil && !pluginAllowed(name) {
-		return errors.Newf("age plugin %q is not allowed (set SHH_ALLOWED_AGE_PLUGINS to permit it)", name)
+	if name, _, err := plugin.ParseRecipient(s); err == nil {
+		return requireAllowedPlugin(name)
 	}
 	return nil
 }
@@ -65,8 +72,8 @@ func pluginUI() *plugin.ClientUI {
 func ParseRecipient(s string) (age.Recipient, error) {
 	if name, _, err := plugin.ParseRecipient(s); err == nil {
 		// Allowlist check BEFORE NewRecipient, which would exec age-plugin-<name>.
-		if !pluginAllowed(name) {
-			return nil, errors.Newf("recipient uses age plugin %q, which is not allowed (set SHH_ALLOWED_AGE_PLUGINS to permit it)", name)
+		if err := requireAllowedPlugin(name); err != nil {
+			return nil, err
 		}
 		r, err := plugin.NewRecipient(s, pluginUI())
 		if err != nil {
@@ -89,8 +96,8 @@ func ParseIdentity(s string) (age.Identity, error) {
 	if name, _, err := plugin.ParseIdentity(s); err == nil {
 		// Allowlist check BEFORE NewIdentity, which would exec age-plugin-<name>.
 		// SHH_AGE_KEY is attacker-controllable in CI, so this is an exec gate too.
-		if !pluginAllowed(name) {
-			return nil, errors.Newf("identity uses age plugin %q, which is not allowed (set SHH_ALLOWED_AGE_PLUGINS to permit it)", name)
+		if err := requireAllowedPlugin(name); err != nil {
+			return nil, err
 		}
 		id, err := plugin.NewIdentity(s, pluginUI())
 		if err != nil {
@@ -109,10 +116,7 @@ func ParseIdentity(s string) (age.Identity, error) {
 // X25519). Encoding-only: it does not run a plugin binary.
 func ValidateRecipient(s string) error {
 	if name, _, err := plugin.ParseRecipient(s); err == nil {
-		if !pluginAllowed(name) {
-			return errors.Newf("age plugin %q is not allowed (set SHH_ALLOWED_AGE_PLUGINS to permit it)", name)
-		}
-		return nil
+		return requireAllowedPlugin(name)
 	}
 	if _, err := age.ParseX25519Recipient(s); err == nil {
 		return nil
@@ -125,10 +129,7 @@ func ValidateRecipient(s string) error {
 // it's safe for validating env vars / CLI input cheaply.
 func ValidateIdentity(s string) error {
 	if name, _, err := plugin.ParseIdentity(s); err == nil {
-		if !pluginAllowed(name) {
-			return errors.Newf("age plugin %q is not allowed (set SHH_ALLOWED_AGE_PLUGINS to permit it)", name)
-		}
-		return nil
+		return requireAllowedPlugin(name)
 	}
 	if _, err := age.ParseX25519Identity(s); err == nil {
 		return nil
