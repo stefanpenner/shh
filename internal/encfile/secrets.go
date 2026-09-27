@@ -2,12 +2,12 @@ package encfile
 
 import (
 	"crypto/hmac"
-	"sort"
 	"strings"
 
 	"github.com/cockroachdb/errors"
 
 	"github.com/stefanpenner/shh/internal/crypto"
+	"github.com/stefanpenner/shh/internal/envutil"
 )
 
 // verifyMAC checks the file MAC using the already-unwrapped dataKey.
@@ -92,22 +92,12 @@ func resolveDataKey(ef *EncryptedFile, privateKey string) ([]byte, error) {
 				return dataKey, nil
 			}
 		}
-		names := make([]string, 0, len(ef.Recipients))
-		for name := range ef.Recipients {
-			names = append(names, name)
-		}
-		sort.Strings(names)
 		return nil, errors.Newf("your key (%s) is not in the recipients list\n  authorized: %s\n  ask a teammate to run: shh users add <your-github-username>",
-			pubKey, strings.Join(names, ", "))
+			pubKey, strings.Join(envutil.SortedKeys(ef.Recipients), ", "))
 	}
 
 	// Plugin identity: recipient not derivable — trial-unwrap each entry.
-	wrappedNames := make([]string, 0, len(ef.WrappedKeys))
-	for name := range ef.WrappedKeys {
-		wrappedNames = append(wrappedNames, name)
-	}
-	sort.Strings(wrappedNames)
-	for _, name := range wrappedNames {
+	for _, name := range envutil.SortedKeys(ef.WrappedKeys) {
 		if dataKey, err := crypto.UnwrapDataKey(ef.WrappedKeys[name], privateKey); err == nil {
 			return dataKey, nil
 		}
