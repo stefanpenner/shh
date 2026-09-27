@@ -67,92 +67,99 @@ type usersAddOpts struct {
 }
 
 func usersAddCmd(args []string, deployName, deployKey string, opts usersAddOpts) error {
-	var newKey, name string
-	var err error
-	var generatedSecret string // set when we mint an extractable age identity
-
-	if deployName != "" {
-		// Deploy key mode: --name provided
-		if err := envutil.ValidateEnvName(deployName); err != nil {
-			return errors.Wrapf(err, "invalid --name")
-		}
-		name = shhUserPrefix + deployName
-		if deployKey != "" {
-			// User provided a key — validate the encoding (X25519 or a plugin
-			// recipient such as a YubiKey/Secure Enclave key). Encoding-only, so
-			// no plugin binary or hardware is required just to add someone.
-			if err := crypto.ValidateRecipient(deployKey); err != nil {
-				return errors.Newf("invalid age public key %q: %v", deployKey, err)
-			}
-			newKey = deployKey
-		} else {
-			// Generate a new keypair
-			identity, err := age.GenerateX25519Identity()
-			if err != nil {
-				return errors.Wrap(err, "generate age key")
-			}
-			newKey = identity.Recipient().String()
-			generatedSecret = identity.String()
-			fmt.Println(hintStyle.Render("Secret key (store this in your CI/deploy platform as SHH_AGE_KEY):"))
-			fmt.Println()
-			fmt.Printf("  SHH_AGE_KEY=%s\n", generatedSecret)
-			fmt.Println()
-			fmt.Println(hintStyle.Render("This is the only time this key will be displayed."))
-			fmt.Println(hintStyle.Render("Hint: " + qr.ChecksumHint(generatedSecret) + " — eyeball-check on paper cards."))
-		}
-	} else if len(args) > 0 {
-		// GitHub / raw age key mode (existing behavior)
-		newKey, name, err = github.ResolveUserKey(args[0])
-		if err != nil {
-			return err
-		}
-	} else {
-		return errors.New("provide a GitHub username, age public key, or use --name for deploy keys")
-	}
-
-	file := envutil.FindEncFile()
-	var ef *encfile.EncryptedFile
-
-	privKey, err := keyring.GetKey()
+	newKey, name, generatedSecret, err := resolveAddRecipient(args, deployName, deployKey)
 	if err != nil {
 		return err
 	}
 
-	if _, err := os.Stat(file); err == nil {
-		ef, err = loadEncryptedFile(file)
-		if err != nil {
-			return err
-		}
-	} else {
-		// Create new empty file with current user
-		username, err := github.RequireUsername()
-		if err != nil {
-			return err
-		}
-		recipients, err := encfile.DefaultRecipients(privKey, username)
-		if err != nil {
-			return err
-		}
-		ef, err = encfile.EncryptSecrets(map[string]string{}, recipients)
-		if err != nil {
-			return err
-		}
+	file := envutil.FindEncFile()
+	privKey, err := keyring.GetKey()
+	if err != nil {
+		return err
+	}
+	ef, err := loadOrCreateEnc(file, privKey)
+	if err != nil {
+		return err
 	}
 
-	// Check for duplicate key
 	for _, pk := range ef.Recipients {
 		if pk == newKey {
 			fmt.Println("User already present.")
 			return nil
 		}
 	}
-
-	// Check for name collision
 	if _, exists := ef.Recipients[name]; exists {
 		return errors.Newf("name %q already in use (specify a different name)", name)
 	}
 
-	// Add recipient and re-wrap data key
+	if err := rewrapAndSave(file, ef, name, newKey, privKey); err != nil {
+		return err
+	}
+
+	fmt.Println(successStyle.Render(fmt.Sprintf("Added %s.", RecipientDisplayName(name))))
+	return emitRecoveryQR(generatedSecret, opts)
+}
+
+// resolveAddRecipient returns the key and name to grant.
+// generatedSecret is set only when this call minted an extractable identity.
+func resolveAddRecipient(args []string, deployName, deployKey string) (string, string, string, error) {
+	if deployName != "" {
+		return deployRecipient(deployName, deployKey)
+	}
+	if len(args) > 0 {
+		key, name, err := github.ResolveUserKey(args[0])
+		return key, name, "", err
+	}
+	return "", "", "", errors.New("provide a GitHub username, age public key, or use --name for deploy keys")
+}
+
+func deployRecipient(deployName, deployKey string) (string, string, string, error) {
+	if err := envutil.ValidateEnvName(deployName); err != nil {
+		return "", "", "", errors.Wrapf(err, "invalid --name")
+	}
+	name := shhUserPrefix + deployName
+	if deployKey != "" {
+		// Encoding only (X25519 or a plugin recipient). No plugin binary or
+		// hardware is required just to add someone.
+		if err := crypto.ValidateRecipient(deployKey); err != nil {
+			return "", "", "", errors.Newf("invalid age public key %q: %v", deployKey, err)
+		}
+		return deployKey, name, "", nil
+	}
+
+	identity, err := age.GenerateX25519Identity()
+	if err != nil {
+		return "", "", "", errors.Wrap(err, "generate age key")
+	}
+	secret := identity.String()
+	fmt.Println(hintStyle.Render("Secret key (store this in your CI/deploy platform as SHH_AGE_KEY):"))
+	fmt.Println()
+	fmt.Printf("  SHH_AGE_KEY=%s\n", secret)
+	fmt.Println()
+	fmt.Println(hintStyle.Render("This is the only time this key will be displayed."))
+	fmt.Println(hintStyle.Render("Hint: " + qr.ChecksumHint(secret) + " — eyeball-check on paper cards."))
+	return identity.Recipient().String(), name, secret, nil
+}
+
+// loadOrCreateEnc loads the vault. Any stat failure is treated as missing:
+// an empty vault whose first recipient is the current user.
+func loadOrCreateEnc(file, privKey string) (*encfile.EncryptedFile, error) {
+	if _, err := os.Stat(file); err == nil {
+		return loadEncryptedFile(file)
+	}
+
+	username, err := github.RequireUsername()
+	if err != nil {
+		return nil, err
+	}
+	recipients, err := encfile.DefaultRecipients(privKey, username)
+	if err != nil {
+		return nil, err
+	}
+	return encfile.EncryptSecrets(map[string]string{}, recipients)
+}
+
+func rewrapAndSave(file string, ef *encfile.EncryptedFile, name, newKey, privKey string) error {
 	newRecipients := make(map[string]string, len(ef.Recipients)+1)
 	for k, v := range ef.Recipients {
 		newRecipients[k] = v
@@ -162,26 +169,23 @@ func usersAddCmd(args []string, deployName, deployKey string, opts usersAddOpts)
 	if err := encfile.ReWrapDataKey(ef, newRecipients, privKey); err != nil {
 		return err
 	}
-
-	if err := encfile.Save(file, ef); err != nil {
-		return err
-	}
-
-	fmt.Println(successStyle.Render(fmt.Sprintf("Added %s.", RecipientDisplayName(name))))
-
-	if generatedSecret != "" && (opts.QR || opts.QROut != "") {
-		if err := emitRecoveryQR(generatedSecret, opts); err != nil {
-			return err
-		}
-	} else if (opts.QR || opts.QROut != "") && generatedSecret == "" {
-		fmt.Println(hintStyle.Render("Note: --qr only applies when a new secret key is generated (omit --key)."))
-	}
-	return nil
+	return encfile.Save(file, ef)
 }
 
-// emitRecoveryQR writes a PNG and/or terminal hint for the recovery identity.
+// emitRecoveryQR writes a PNG and/or terminal hint for a minted identity.
 // The secret is never written to stdout as image bytes — file path only.
+// --qr with no minted secret prints a note and writes nothing.
 func emitRecoveryQR(secret string, opts usersAddOpts) error {
+	if secret == "" {
+		if opts.QR || opts.QROut != "" {
+			fmt.Println(hintStyle.Render("Note: --qr only applies when a new secret key is generated (omit --key)."))
+		}
+		return nil
+	}
+	if !opts.QR && opts.QROut == "" {
+		return nil
+	}
+
 	if opts.QROut != "" {
 		if err := qr.EncodeFile(secret, opts.QROut); err != nil {
 			return errors.Wrap(err, "write QR PNG")
@@ -190,7 +194,7 @@ func emitRecoveryQR(secret string, opts usersAddOpts) error {
 	}
 	if opts.QR {
 		// Compact ANSI QR on stderr so stdout stays scriptable for SHH_AGE_KEY lines.
-		code, err := encodeANSI(secret)
+		code, err := qr.EncodeANSI(secret)
 		if err != nil {
 			return err
 		}
@@ -200,12 +204,6 @@ func emitRecoveryQR(secret string, opts usersAddOpts) error {
 		fmt.Fprintln(os.Stderr)
 	}
 	return nil
-}
-
-// encodeANSI is a thin wrapper so tests can stub if needed; uses Medium PNG
-// path is primary — ANSI is best-effort via go-qrcode's ToSmallString.
-func encodeANSI(payload string) (string, error) {
-	return qr.EncodeANSI(payload)
 }
 
 func usersRemoveCmd(args []string) error {
