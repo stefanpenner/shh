@@ -75,43 +75,51 @@ func ResolveUserKey(arg string) (ageKey, name string, err error) {
 	if envutil.AgeKeyPattern.MatchString(arg) {
 		return arg, arg, nil
 	}
-
-	username := arg
-	if !envutil.GithubUserPattern.MatchString(username) {
-		return "", "", errors.Newf("invalid GitHub username or age key: %q", username)
+	if !envutil.GithubUserPattern.MatchString(arg) {
+		return "", "", errors.Newf("invalid GitHub username or age key: %q", arg)
 	}
 
-	fmt.Printf("Fetching SSH keys for github.com/%s...\n", username)
+	fmt.Printf("Fetching SSH keys for github.com/%s...\n", arg)
+	ageKey, err = githubAgeKey(arg)
+	if err != nil {
+		return "", "", err
+	}
+	fmt.Printf("Converted %s's SSH key -> %s\n", arg, ageKey)
+	return ageKey, "https://github.com/" + arg, nil
+}
+
+// githubAgeKey fetches username's ed25519 SSH key and returns the age recipient.
+func githubAgeKey(username string) (string, error) {
 	resp, err := httpClient.Get("https://github.com/" + username + ".keys")
 	if err != nil {
-		return "", "", errors.Wrap(err, "fetch keys")
+		return "", errors.Wrap(err, "fetch keys")
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return "", "", errors.Newf("could not fetch keys for %q (HTTP %d)", username, resp.StatusCode)
+		return "", errors.Newf("could not fetch keys for %q (HTTP %d)", username, resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 
-	var ed25519Line string
-	for _, line := range strings.Split(string(body), "\n") {
+	line := ed25519Line(string(body))
+	if line == "" {
+		return "", errors.Newf("no ed25519 SSH key found for %q (age requires ed25519)", username)
+	}
+	ageKey, err := sshtoa.SSHPublicKeyToAge([]byte(line))
+	if err != nil {
+		return "", errors.Wrap(err, "ssh-to-age")
+	}
+	return *ageKey, nil
+}
+
+func ed25519Line(body string) string {
+	for _, line := range strings.Split(body, "\n") {
 		if strings.HasPrefix(line, "ssh-ed25519") {
-			ed25519Line = line
-			break
+			return line
 		}
 	}
-	if ed25519Line == "" {
-		return "", "", errors.Newf("no ed25519 SSH key found for %q (age requires ed25519)", username)
-	}
-
-	ageKeyPtr, err := sshtoa.SSHPublicKeyToAge([]byte(ed25519Line))
-	if err != nil {
-		return "", "", errors.Wrap(err, "ssh-to-age")
-	}
-	fmt.Printf("Converted %s's SSH key -> %s\n", username, *ageKeyPtr)
-
-	return *ageKeyPtr, "https://github.com/" + username, nil
+	return ""
 }
