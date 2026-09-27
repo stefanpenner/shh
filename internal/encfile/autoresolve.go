@@ -12,6 +12,29 @@ import (
 	"github.com/stefanpenner/shh/internal/merge"
 )
 
+// MergeSides decrypts three sides and merges secrets and recipients.
+// conflicts is set only when err is a key conflict.
+func MergeSides(ancestor, ours, theirs *EncryptedFile, privateKey string) (map[string]string, map[string]string, []string, error) {
+	ancestorSecrets, err := DecryptSecrets(ancestor, privateKey)
+	if err != nil {
+		return nil, nil, nil, errors.Wrap(err, "decrypt ancestor")
+	}
+	oursSecrets, err := DecryptSecrets(ours, privateKey)
+	if err != nil {
+		return nil, nil, nil, errors.Wrap(err, "decrypt ours")
+	}
+	theirsSecrets, err := DecryptSecrets(theirs, privateKey)
+	if err != nil {
+		return nil, nil, nil, errors.Wrap(err, "decrypt theirs")
+	}
+
+	mergedSecrets, conflicts, err := merge.MergeSecrets(ancestorSecrets, oursSecrets, theirsSecrets)
+	if err != nil {
+		return nil, nil, conflicts, err
+	}
+	return mergedSecrets, merge.MergeStringMaps(ancestor.Recipients, ours.Recipients, theirs.Recipients), nil, nil
+}
+
 // TryAutoResolve checks if a file is in a git merge conflict and resolves it.
 // Returns the resolved EncryptedFile or an error if not conflicted / resolution fails.
 func TryAutoResolve(path string, privateKey string) (*EncryptedFile, error) {
@@ -58,25 +81,13 @@ func TryAutoResolve(path string, privateKey string) (*EncryptedFile, error) {
 		return nil, errors.Wrap(err, "parse theirs")
 	}
 
-	ancestorSecrets, err := DecryptSecrets(ancestor, privateKey)
-	if err != nil {
-		return nil, errors.Wrap(err, "decrypt ancestor")
-	}
-	oursSecrets, err := DecryptSecrets(ours, privateKey)
-	if err != nil {
-		return nil, errors.Wrap(err, "decrypt ours")
-	}
-	theirsSecrets, err := DecryptSecrets(theirs, privateKey)
-	if err != nil {
-		return nil, errors.Wrap(err, "decrypt theirs")
-	}
-
-	mergedSecrets, conflicts, err := merge.MergeSecrets(ancestorSecrets, oursSecrets, theirsSecrets)
-	if err != nil {
+	mergedSecrets, mergedRecipients, conflicts, err := MergeSides(ancestor, ours, theirs, privateKey)
+	if len(conflicts) > 0 {
 		return nil, errors.Newf("cannot auto-resolve: conflicting keys: %s", strings.Join(conflicts, ", "))
 	}
-
-	mergedRecipients := merge.MergeStringMaps(ancestor.Recipients, ours.Recipients, theirs.Recipients)
+	if err != nil {
+		return nil, err
+	}
 
 	newEf, err := EncryptSecrets(mergedSecrets, mergedRecipients)
 	if err != nil {

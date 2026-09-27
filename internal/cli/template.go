@@ -10,7 +10,6 @@ import (
 
 	"github.com/stefanpenner/shh/internal/encfile"
 	"github.com/stefanpenner/shh/internal/keyring"
-	"github.com/stefanpenner/shh/internal/merge"
 	tmpl "github.com/stefanpenner/shh/internal/template"
 )
 
@@ -49,53 +48,49 @@ func cmdMerge(ancestorPath, oursPath, theirsPath string) error {
 		return err
 	}
 
+	ancestor, ours, theirs, err := loadMergeSides(ancestorPath, oursPath, theirsPath)
+	if err != nil {
+		return err
+	}
+
+	merged, err := mergeSides(ancestor, ours, theirs, privKey)
+	if err != nil {
+		return err
+	}
+
+	if err := encfile.Save(oursPath, merged); err != nil {
+		return errors.Wrap(err, "save merged file")
+	}
+	return nil
+}
+
+func loadMergeSides(ancestorPath, oursPath, theirsPath string) (*encfile.EncryptedFile, *encfile.EncryptedFile, *encfile.EncryptedFile, error) {
 	ancestor, err := loadEncryptedFile(ancestorPath)
 	if err != nil {
-		return errors.Wrap(err, "load ancestor")
+		return nil, nil, nil, errors.Wrap(err, "load ancestor")
 	}
 	ours, err := loadEncryptedFile(oursPath)
 	if err != nil {
-		return errors.Wrap(err, "load ours")
+		return nil, nil, nil, errors.Wrap(err, "load ours")
 	}
 	theirs, err := loadEncryptedFile(theirsPath)
 	if err != nil {
-		return errors.Wrap(err, "load theirs")
+		return nil, nil, nil, errors.Wrap(err, "load theirs")
 	}
+	return ancestor, ours, theirs, nil
+}
 
-	// Decrypt all three
-	ancestorSecrets, err := encfile.DecryptSecrets(ancestor, privKey)
+func mergeSides(ancestor, ours, theirs *encfile.EncryptedFile, privKey string) (*encfile.EncryptedFile, error) {
+	secrets, recipients, conflicts, err := encfile.MergeSides(ancestor, ours, theirs, privKey)
+	if len(conflicts) > 0 {
+		return nil, errors.Newf("shh merge: conflict on keys: %s", strings.Join(conflicts, ", "))
+	}
 	if err != nil {
-		return errors.Wrap(err, "decrypt ancestor")
+		return nil, err
 	}
-	oursSecrets, err := encfile.DecryptSecrets(ours, privKey)
+	ef, err := encfile.EncryptSecrets(secrets, recipients)
 	if err != nil {
-		return errors.Wrap(err, "decrypt ours")
+		return nil, errors.Wrap(err, "re-encrypt merged secrets")
 	}
-	theirsSecrets, err := encfile.DecryptSecrets(theirs, privKey)
-	if err != nil {
-		return errors.Wrap(err, "decrypt theirs")
-	}
-
-	// 3-way merge secrets
-	mergedSecrets, conflicts, mergeErr := merge.MergeSecrets(ancestorSecrets, oursSecrets, theirsSecrets)
-	if mergeErr != nil {
-		fmt.Fprintf(os.Stderr, "shh merge: conflict on keys: %s\n", strings.Join(conflicts, ", "))
-		os.Exit(1)
-	}
-
-	// Merge recipients (union, with deletion support)
-	mergedRecipients := merge.MergeStringMaps(ancestor.Recipients, ours.Recipients, theirs.Recipients)
-
-	// Re-encrypt with merged values
-	newEf, err := encfile.EncryptSecrets(mergedSecrets, mergedRecipients)
-	if err != nil {
-		return errors.Wrap(err, "re-encrypt merged secrets")
-	}
-
-	// Write result to the "ours" path (git convention)
-	if err := encfile.Save(oursPath, newEf); err != nil {
-		return errors.Wrap(err, "save merged file")
-	}
-
-	return nil
+	return ef, nil
 }
