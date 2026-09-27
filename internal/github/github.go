@@ -37,19 +37,24 @@ func Username() string {
 	if err != nil {
 		return ""
 	}
-	// Parse "Logged in to github.com account <username>"
 	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.Contains(line, "account") {
-			parts := strings.Fields(line)
-			for i, p := range parts {
-				if p == "account" && i+1 < len(parts) {
-					candidate := strings.TrimRight(parts[i+1], " ()")
-					if envutil.GithubUserPattern.MatchString(candidate) {
-						return candidate
-					}
-				}
-			}
+		if user := ghAccount(line); user != "" {
+			return user
+		}
+	}
+	return ""
+}
+
+// ghAccount reads "Logged in to github.com account <username>" from one status line.
+func ghAccount(line string) string {
+	fields := strings.Fields(strings.TrimSpace(line))
+	for i, field := range fields {
+		if field != "account" || i+1 >= len(fields) {
+			continue
+		}
+		candidate := strings.TrimRight(fields[i+1], " ()")
+		if envutil.GithubUserPattern.MatchString(candidate) {
+			return candidate
 		}
 	}
 	return ""
