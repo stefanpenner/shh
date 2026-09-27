@@ -29,43 +29,30 @@ func MergeSecrets(ancestor, ours, theirs map[string]string) (map[string]string, 
 
 		switch {
 		case oOK && tOK && oVal == tVal:
-			// both agree
 			result[k] = oVal
 		case !oOK && !tOK:
-			// both deleted
+			continue
 		case oOK && !tOK && !aOK:
-			// added only in ours
 			result[k] = oVal
 		case !oOK && tOK && !aOK:
-			// added only in theirs
 			result[k] = tVal
 		case oOK && !tOK && aOK:
-			// theirs deleted
-			if oVal == aVal {
-				// ours unchanged, accept deletion
-			} else {
+			if oVal != aVal {
 				conflicts = append(conflicts, k)
 			}
 		case !oOK && tOK && aOK:
-			// ours deleted
-			if tVal == aVal {
-				// theirs unchanged, accept deletion
-			} else {
+			if tVal != aVal {
 				conflicts = append(conflicts, k)
 			}
 		case oOK && tOK && aOK:
 			if oVal == aVal {
-				// only theirs changed
 				result[k] = tVal
 			} else if tVal == aVal {
-				// only ours changed
 				result[k] = oVal
 			} else {
-				// both changed differently
 				conflicts = append(conflicts, k)
 			}
 		case oOK && tOK && !aOK:
-			// both added with different values
 			conflicts = append(conflicts, k)
 		default:
 			conflicts = append(conflicts, k)
@@ -81,7 +68,6 @@ func MergeSecrets(ancestor, ours, theirs map[string]string) (map[string]string, 
 
 func MergeStringMaps(ancestor, ours, theirs map[string]string) map[string]string {
 	result := make(map[string]string)
-	// Union of ours and theirs; if both added/kept, prefer ours
 	for k, v := range ours {
 		result[k] = v
 	}
@@ -90,7 +76,6 @@ func MergeStringMaps(ancestor, ours, theirs map[string]string) map[string]string
 			result[k] = v
 		}
 	}
-	// Handle deletions: if ancestor had it and one side removed it, remove it
 	for k := range ancestor {
 		_, inOurs := ours[k]
 		_, inTheirs := theirs[k]
