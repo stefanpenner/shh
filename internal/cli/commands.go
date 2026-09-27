@@ -176,26 +176,16 @@ func cmdRm(file, key string) error {
 		return err
 	}
 
-	ef, err := loadEncryptedFile(file)
+	secrets, recipients, err := openExisting(file, privKey)
 	if err != nil {
 		return err
 	}
-	secrets, err := encfile.DecryptSecrets(ef, privKey)
-	if err != nil {
-		return err
-	}
-
 	if _, exists := secrets[key]; !exists {
 		return errors.Newf("key %q not found in %s", key, file)
 	}
-
 	delete(secrets, key)
 
-	newEf, err := encfile.EncryptSecrets(secrets, ef.Recipients)
-	if err != nil {
-		return err
-	}
-	if err := encfile.Save(file, newEf); err != nil {
+	if err := saveSecrets(file, secrets, recipients); err != nil {
 		return err
 	}
 	fmt.Println(successStyle.Render(fmt.Sprintf("Removed %s from %s.", key, file)))
@@ -245,15 +235,7 @@ func gateKeys(secrets map[string]string, note string) error {
 
 func openOrCreate(file, privKey string) (map[string]string, map[string]string, error) {
 	if _, err := os.Stat(file); err == nil {
-		ef, err := loadEncryptedFile(file)
-		if err != nil {
-			return nil, nil, err
-		}
-		secrets, err := encfile.DecryptSecrets(ef, privKey)
-		if err != nil {
-			return nil, nil, err
-		}
-		return secrets, ef.Recipients, nil
+		return openExisting(file, privKey)
 	}
 
 	username, err := github.RequireUsername()
@@ -265,6 +247,18 @@ func openOrCreate(file, privKey string) (map[string]string, map[string]string, e
 		return nil, nil, err
 	}
 	return make(map[string]string), recipients, nil
+}
+
+func openExisting(file, privKey string) (map[string]string, map[string]string, error) {
+	ef, err := loadEncryptedFile(file)
+	if err != nil {
+		return nil, nil, err
+	}
+	secrets, err := encfile.DecryptSecrets(ef, privKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	return secrets, ef.Recipients, nil
 }
 
 func saveSecrets(file string, secrets, recipients map[string]string) error {
