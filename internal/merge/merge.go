@@ -8,16 +8,7 @@ import (
 )
 
 func MergeSecrets(ancestor, ours, theirs map[string]string) (map[string]string, []string, error) {
-	allKeys := make(map[string]bool)
-	for k := range ancestor {
-		allKeys[k] = true
-	}
-	for k := range ours {
-		allKeys[k] = true
-	}
-	for k := range theirs {
-		allKeys[k] = true
-	}
+	allKeys := unionKeys(ancestor, ours, theirs)
 
 	result := make(map[string]string)
 	var conflicts []string
@@ -64,6 +55,16 @@ func MergeSecrets(ancestor, ours, theirs map[string]string) (map[string]string, 
 		return nil, conflicts, errors.Newf("merge conflict on keys: %s", strings.Join(conflicts, ", "))
 	}
 	return result, nil, nil
+}
+
+func unionKeys(maps ...map[string]string) map[string]bool {
+	all := make(map[string]bool)
+	for _, m := range maps {
+		for k := range m {
+			all[k] = true
+		}
+	}
+	return all
 }
 
 func MergeStringMaps(ancestor, ours, theirs map[string]string) map[string]string {
