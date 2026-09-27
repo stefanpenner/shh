@@ -84,7 +84,7 @@ func resolveDataKey(ef *EncryptedFile, privateKey string) ([]byte, error) {
 		return dataKey, nil
 	}
 
-	if pubKey, err := publicKeyFrom(privateKey); err == nil {
+	if pubKey, err := crypto.PublicKeyFrom(privateKey); err == nil {
 		// Recipient is derivable (X25519): look the entry up by name.
 		for name, pk := range ef.Recipients {
 			if pk == pubKey {
@@ -188,14 +188,9 @@ func ReWrapDataKey(ef *EncryptedFile, newRecipients map[string]string, privateKe
 
 // DefaultRecipients creates a default recipients map from the given private key and GitHub username.
 func DefaultRecipients(privateKey string, ghUsername string) (map[string]string, error) {
-	pubKey, err := publicKeyFrom(privateKey)
+	pubKey, err := crypto.PublicKeyFrom(privateKey)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]string{"https://github.com/" + ghUsername: pubKey}, nil
-}
-
-// publicKeyFrom derives the public key from an age private key string.
-func publicKeyFrom(privateKey string) (string, error) {
-	return crypto.PublicKeyFrom(privateKey)
 }
