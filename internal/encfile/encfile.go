@@ -105,15 +105,17 @@ func Save(path string, ef *EncryptedFile) error {
 		return errors.Wrap(err, "create temp file")
 	}
 	tmpName := tmp.Name()
-
-	if _, err := tmp.Write(data); err != nil {
+	discard := func() {
 		tmp.Close()        // #nosec G104 -- cleanup in error path
 		os.Remove(tmpName) // #nosec G104 -- best-effort cleanup
+	}
+
+	if _, err := tmp.Write(data); err != nil {
+		discard()
 		return errors.Wrap(err, "write temp file")
 	}
 	if err := tmp.Chmod(0600); err != nil {
-		tmp.Close()        // #nosec G104 -- cleanup in error path
-		os.Remove(tmpName) // #nosec G104 -- best-effort cleanup
+		discard()
 		return errors.Wrap(err, "chmod temp file")
 	}
 	if err := tmp.Close(); err != nil {
