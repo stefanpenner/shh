@@ -44,14 +44,8 @@ func EnvFlag(envName string) string {
 	return envName + ".env.enc"
 }
 
-func ResolveFile(envName string, args []string) string {
-	if envName != "" {
-		return EnvFlag(envName)
-	}
-	return FileArg(args)
-}
-
-// ResolveFileE is like ResolveFile but validates the env name to prevent path traversal.
+// ResolveFileE picks envName.env.enc, else the positional file, else FindEncFile.
+// The env name is checked so it cannot escape the filename.
 func ResolveFileE(envName string, args []string) (string, error) {
 	if envName != "" {
 		if err := ValidateEnvName(envName); err != nil {
