@@ -60,13 +60,7 @@ func usersListCmd() error {
 	return nil
 }
 
-// usersAddOpts configures optional recovery QR emission for generated keys.
-type usersAddOpts struct {
-	QROut string // path to write PNG; empty = no file
-	QR    bool   // also print a small ANSI QR to stderr when generating a secret
-}
-
-func usersAddCmd(args []string, deployName, deployKey string, opts usersAddOpts) error {
+func usersAddCmd(args []string, deployName, deployKey, qrOut string, printQR bool) error {
 	newKey, name, generatedSecret, err := resolveAddRecipient(args, deployName, deployKey)
 	if err != nil {
 		return err
@@ -97,7 +91,7 @@ func usersAddCmd(args []string, deployName, deployKey string, opts usersAddOpts)
 	}
 
 	fmt.Println(successStyle.Render(fmt.Sprintf("Added %s.", RecipientDisplayName(name))))
-	return emitRecoveryQR(generatedSecret, opts)
+	return emitRecoveryQR(generatedSecret, qrOut, printQR)
 }
 
 // resolveAddRecipient returns the key and name to grant.
@@ -142,21 +136,17 @@ func deployRecipient(deployName, deployKey string) (string, string, string, erro
 }
 
 // loadOrCreateEnc loads the vault. Any stat failure is treated as missing:
-// an empty vault whose first recipient is the current user.
+// seal openOrCreate's empty vault (current user is the first recipient).
 func loadOrCreateEnc(file, privKey string) (*encfile.EncryptedFile, error) {
 	if _, err := os.Stat(file); err == nil {
 		return loadEncryptedFile(file)
 	}
 
-	username, err := github.RequireUsername()
+	secrets, recipients, err := openOrCreate(file, privKey)
 	if err != nil {
 		return nil, err
 	}
-	recipients, err := encfile.DefaultRecipients(privKey, username)
-	if err != nil {
-		return nil, err
-	}
-	return encfile.EncryptSecrets(map[string]string{}, recipients)
+	return encfile.EncryptSecrets(secrets, recipients)
 }
 
 func rewrapAndSave(file string, ef *encfile.EncryptedFile, name, newKey, privKey string) error {
@@ -175,24 +165,24 @@ func rewrapAndSave(file string, ef *encfile.EncryptedFile, name, newKey, privKey
 // emitRecoveryQR writes a PNG and/or terminal hint for a minted identity.
 // The secret is never written to stdout as image bytes — file path only.
 // --qr with no minted secret prints a note and writes nothing.
-func emitRecoveryQR(secret string, opts usersAddOpts) error {
+func emitRecoveryQR(secret, qrOut string, printQR bool) error {
 	if secret == "" {
-		if opts.QR || opts.QROut != "" {
+		if printQR || qrOut != "" {
 			fmt.Println(hintStyle.Render("Note: --qr only applies when a new secret key is generated (omit --key)."))
 		}
 		return nil
 	}
-	if !opts.QR && opts.QROut == "" {
+	if !printQR && qrOut == "" {
 		return nil
 	}
 
-	if opts.QROut != "" {
-		if err := qr.EncodeFile(secret, opts.QROut); err != nil {
+	if qrOut != "" {
+		if err := qr.EncodeFile(secret, qrOut); err != nil {
 			return errors.Wrap(err, "write QR PNG")
 		}
-		fmt.Println(successStyle.Render(fmt.Sprintf("QR written to %s (0600) — print or import to 1Password, then delete the file.", opts.QROut)))
+		fmt.Println(successStyle.Render(fmt.Sprintf("QR written to %s (0600) — print or import to 1Password, then delete the file.", qrOut)))
 	}
-	if opts.QR {
+	if printQR {
 		// Compact ANSI QR on stderr so stdout stays scriptable for SHH_AGE_KEY lines.
 		code, err := qr.EncodeANSI(secret)
 		if err != nil {

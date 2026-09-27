@@ -42,7 +42,7 @@ func TestCLI_E2E_SecretsAndUsersAndQR(t *testing.T) {
 
 	// users add recovery with QR
 	qrPath := filepath.Join(t.TempDir(), "rec.png")
-	require.NoError(t, usersAddCmd(nil, "recovery", "", usersAddOpts{QROut: qrPath}))
+	require.NoError(t, usersAddCmd(nil, "recovery", "", qrPath, false))
 	payload, err := qr.DecodeFile(qrPath)
 	require.NoError(t, err)
 
@@ -103,7 +103,7 @@ func TestCLI_E2E_QRLoginAfterDailyLost(t *testing.T) {
 	require.NoError(t, encfile.Save(".env.enc", ef))
 
 	qrPath := filepath.Join(t.TempDir(), "r.png")
-	require.NoError(t, usersAddCmd(nil, "recovery", "", usersAddOpts{QROut: qrPath}))
+	require.NoError(t, usersAddCmd(nil, "recovery", "", qrPath, false))
 
 	os.Unsetenv("SHH_AGE_KEY")
 	// Keyring store needs a secret service (absent on headless CI).

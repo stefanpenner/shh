@@ -97,10 +97,7 @@ func runUsersAdd(cmd *cobra.Command, args []string) error {
 		key = derived
 	}
 
-	return usersAddCmd(args, name, key, usersAddOpts{
-		QR:    mustBool(cmd, "qr"),
-		QROut: mustString(cmd, "qr-out"),
-	})
+	return usersAddCmd(args, name, key, mustString(cmd, "qr-out"), mustBool(cmd, "qr"))
 }
 
 func newRootCmd() *cobra.Command {
