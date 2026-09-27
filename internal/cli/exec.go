@@ -29,13 +29,19 @@ func appendSecrets(env []string, secrets map[string]string) []string {
 	return env
 }
 
+// childEnv is the parent environment minus shh control variables, plus secrets.
+func childEnv(secrets map[string]string) []string {
+	env := envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY", "SHH_PLAINTEXT", "SHH_ALLOWED_AGE_PLUGINS")
+	return appendSecrets(env, secrets)
+}
+
 func cmdShell(file string) error {
 	secrets, err := loadRunSecrets(file)
 	if err != nil {
 		return err
 	}
 
-	env := appendSecrets(envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY", "SHH_PLAINTEXT", "SHH_ALLOWED_AGE_PLUGINS"), secrets)
+	env := childEnv(secrets)
 
 	shell := os.Getenv("SHELL")
 	if shell == "" {
@@ -95,7 +101,7 @@ func cmdRun(file string, args []string) error {
 		return err
 	}
 
-	env := appendSecrets(envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY", "SHH_PLAINTEXT", "SHH_ALLOWED_AGE_PLUGINS"), secrets)
+	env := childEnv(secrets)
 
 	cmd := exec.Command(args[0], args[1:]...) // #nosec G204
 	cmd.Stdin = os.Stdin
