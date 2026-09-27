@@ -27,15 +27,8 @@ func cmdEncrypt(src string) error {
 	}
 
 	secrets := encfile.ParsePlaintext(string(plaintext))
-
-	// Validate key names to match the same rules enforced by cmdEdit and cmdSet.
-	for k := range secrets {
-		if !envutil.EnvVarKeyPattern.MatchString(k) {
-			return errors.Newf("invalid key name %q (must match [A-Za-z_][A-Za-z0-9_]*)", k)
-		}
-		if envutil.DangerousEnvVars[k] {
-			return errors.Newf("setting %q is not allowed (dangerous environment variable)", k)
-		}
+	if err := gateKeys(secrets, ""); err != nil {
+		return err
 	}
 
 	privKey, err := keyring.GetKey()
@@ -63,12 +56,7 @@ func cmdEncrypt(src string) error {
 		recipients = existing.Recipients
 	}
 
-	ef, err := encfile.EncryptSecrets(secrets, recipients)
-	if err != nil {
-		return err
-	}
-
-	if err := encfile.Save(dest, ef); err != nil {
+	if err := saveSecrets(dest, secrets, recipients); err != nil {
 		return err
 	}
 
@@ -115,128 +103,45 @@ func cmdEnv(file string, stdout bool, stderr io.Writer) error {
 }
 
 func cmdEdit(file string) error {
-	var secrets map[string]string
-	var recipients map[string]string
-
 	privKey, err := keyring.GetKey()
 	if err != nil {
 		return err
 	}
 
-	if _, err := os.Stat(file); err == nil {
-		ef, err := loadEncryptedFile(file)
-		if err != nil {
-			return err
-		}
-		secrets, err = encfile.DecryptSecrets(ef, privKey)
-		if err != nil {
-			return err
-		}
-		recipients = ef.Recipients
-	} else {
-		secrets = make(map[string]string)
-		username, err := requireGHUsername()
-		if err != nil {
-			return err
-		}
-		recipients, err = encfile.DefaultRecipients(privKey, username)
-		if err != nil {
-			return err
-		}
+	secrets, recipients, err := openOrCreate(file, privKey)
+	if err != nil {
+		return err
 	}
 
-	// Write to temp file in the same directory as the encrypted file so that
-	// plaintext secrets are not written to a potentially unencrypted /tmp.
-	editDir := filepath.Dir(file)
-	if editDir == "" {
-		editDir = "."
-	}
-	tmpFile, err := os.CreateTemp(editDir, ".shh-edit-*.env")
+	tmpPath, stopSignals, err := writeEditTemp(file, secrets)
 	if err != nil {
-		return errors.Wrap(err, "create temp file")
+		return err
 	}
-	tmpPath := tmpFile.Name()
 	defer os.Remove(tmpPath)
+	defer stopSignals()
 
-	if err := tmpFile.Chmod(0600); err != nil {
-		tmpFile.Close() // #nosec G104 -- best-effort cleanup; already returning Chmod error
-		return errors.Wrap(err, "chmod temp file")
-	}
-
-	// Signal handler to clean up temp file
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		os.Remove(tmpPath) // #nosec G104 -- signal handler; best-effort cleanup
-		os.Exit(1)
-	}()
-	defer signal.Stop(sigCh)
-
-	if _, err := tmpFile.WriteString(encfile.FormatPlaintext(secrets)); err != nil {
-		tmpFile.Close() // #nosec G104
-		return errors.Wrap(err, "write temp file")
-	}
-	if err := tmpFile.Close(); err != nil {
-		return errors.Wrap(err, "close temp file")
-	}
-
-	infoBefore, err := os.Stat(tmpPath)
+	changed, err := runEditor(tmpPath)
 	if err != nil {
 		return err
 	}
-
-	editor := os.Getenv("EDITOR")
-	if editor == "" {
-		editor = "vi"
-	}
-	editorCmd := exec.Command(editor, tmpPath) // #nosec G702,G204
-	editorCmd.Stdin = os.Stdin
-	editorCmd.Stdout = os.Stdout
-	editorCmd.Stderr = os.Stderr
-	editorCmd.Env = envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY", "SHH_PLAINTEXT", "SHH_ALLOWED_AGE_PLUGINS")
-	if err := editorCmd.Run(); err != nil {
-		return errors.Wrap(err, "editor")
-	}
-
-	infoAfter, err := os.Stat(tmpPath)
-	if err != nil {
-		return err
-	}
-	if infoAfter.ModTime().Equal(infoBefore.ModTime()) {
+	if !changed {
 		fmt.Println("No changes made.")
 		return nil
 	}
 
-	edited, err := os.ReadFile(tmpPath) // #nosec G304
-	if err != nil {
-		return errors.Wrap(err, "read edited file")
-	}
-
-	newSecrets := encfile.ParsePlaintext(string(edited))
-
-	for k := range newSecrets {
-		if !envutil.EnvVarKeyPattern.MatchString(k) {
-			return errors.Newf("invalid key name %q (must match [A-Za-z_][A-Za-z0-9_]*); re-open with 'shh edit' to fix", k)
-		}
-		if envutil.DangerousEnvVars[k] {
-			return errors.Newf("setting %q is not allowed (dangerous environment variable); re-open with 'shh edit' to fix", k)
-		}
-	}
-
-	ef, err := encfile.EncryptSecrets(newSecrets, recipients)
+	edited, err := readEdited(tmpPath)
 	if err != nil {
 		return err
 	}
-	return encfile.Save(file, ef)
+	if err := gateKeys(edited, editReopenNote); err != nil {
+		return err
+	}
+	return saveSecrets(file, edited, recipients)
 }
 
 func cmdSet(file, key, value string) error {
-	if !envutil.EnvVarKeyPattern.MatchString(key) {
-		return errors.Newf("invalid key name %q (must match [A-Za-z_][A-Za-z0-9_]*)", key)
-	}
-	if envutil.DangerousEnvVars[key] {
-		return errors.Newf("setting %q is not allowed (dangerous environment variable)", key)
+	if err := gateKey(key, ""); err != nil {
+		return err
 	}
 
 	privKey, err := keyring.GetKey()
@@ -244,39 +149,15 @@ func cmdSet(file, key, value string) error {
 		return err
 	}
 
-	var secrets map[string]string
-	var recipients map[string]string
-
-	if _, err := os.Stat(file); err == nil {
-		ef, err := loadEncryptedFile(file)
-		if err != nil {
-			return err
-		}
-		secrets, err = encfile.DecryptSecrets(ef, privKey)
-		if err != nil {
-			return err
-		}
-		recipients = ef.Recipients
-	} else {
-		secrets = make(map[string]string)
-		username, err := requireGHUsername()
-		if err != nil {
-			return err
-		}
-		recipients, err = encfile.DefaultRecipients(privKey, username)
-		if err != nil {
-			return err
-		}
+	secrets, recipients, err := openOrCreate(file, privKey)
+	if err != nil {
+		return err
 	}
 
 	_, existed := secrets[key]
 	secrets[key] = value
 
-	ef, err := encfile.EncryptSecrets(secrets, recipients)
-	if err != nil {
-		return err
-	}
-	if err := encfile.Save(file, ef); err != nil {
+	if err := saveSecrets(file, secrets, recipients); err != nil {
 		return err
 	}
 
@@ -338,4 +219,134 @@ func cmdGet(file, key string, stderr io.Writer, checkTTY func() bool, quiet bool
 	}
 	fmt.Println(value)
 	return nil
+}
+
+const editReopenNote = "; re-open with 'shh edit' to fix"
+
+func gateKey(key, note string) error {
+	if !envutil.EnvVarKeyPattern.MatchString(key) {
+		return errors.Newf("invalid key name %q (must match [A-Za-z_][A-Za-z0-9_]*)%s", key, note)
+	}
+	if envutil.DangerousEnvVars[key] {
+		return errors.Newf("setting %q is not allowed (dangerous environment variable)%s", key, note)
+	}
+	return nil
+}
+
+func gateKeys(secrets map[string]string, note string) error {
+	for k := range secrets {
+		if err := gateKey(k, note); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func openOrCreate(file, privKey string) (map[string]string, map[string]string, error) {
+	if _, err := os.Stat(file); err == nil {
+		ef, err := loadEncryptedFile(file)
+		if err != nil {
+			return nil, nil, err
+		}
+		secrets, err := encfile.DecryptSecrets(ef, privKey)
+		if err != nil {
+			return nil, nil, err
+		}
+		return secrets, ef.Recipients, nil
+	}
+
+	username, err := requireGHUsername()
+	if err != nil {
+		return nil, nil, err
+	}
+	recipients, err := encfile.DefaultRecipients(privKey, username)
+	if err != nil {
+		return nil, nil, err
+	}
+	return make(map[string]string), recipients, nil
+}
+
+func saveSecrets(file string, secrets, recipients map[string]string) error {
+	ef, err := encfile.EncryptSecrets(secrets, recipients)
+	if err != nil {
+		return err
+	}
+	return encfile.Save(file, ef)
+}
+
+// writeEditTemp writes plaintext beside the encrypted file, not on a shared
+// temp dir. The interrupt handler is armed before the write; the caller
+// defers stopSignals and Remove so it stays live through save.
+func writeEditTemp(file string, secrets map[string]string) (string, func(), error) {
+	editDir := filepath.Dir(file)
+	if editDir == "" {
+		editDir = "."
+	}
+	tmpFile, err := os.CreateTemp(editDir, ".shh-edit-*.env")
+	if err != nil {
+		return "", nil, errors.Wrap(err, "create temp file")
+	}
+	tmpPath := tmpFile.Name()
+
+	if err := tmpFile.Chmod(0600); err != nil {
+		tmpFile.Close()    // #nosec G104 -- best-effort cleanup; already returning Chmod error
+		os.Remove(tmpPath) // #nosec G104 -- best-effort cleanup
+		return "", nil, errors.Wrap(err, "chmod temp file")
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		os.Remove(tmpPath) // #nosec G104 -- signal handler; best-effort cleanup
+		os.Exit(1)
+	}()
+	stopSignals := func() { signal.Stop(sigCh) }
+
+	if _, err := tmpFile.WriteString(encfile.FormatPlaintext(secrets)); err != nil {
+		tmpFile.Close() // #nosec G104
+		stopSignals()
+		os.Remove(tmpPath) // #nosec G104 -- best-effort cleanup
+		return "", nil, errors.Wrap(err, "write temp file")
+	}
+	if err := tmpFile.Close(); err != nil {
+		stopSignals()
+		os.Remove(tmpPath) // #nosec G104 -- best-effort cleanup
+		return "", nil, errors.Wrap(err, "close temp file")
+	}
+	return tmpPath, stopSignals, nil
+}
+
+func runEditor(tmpPath string) (bool, error) {
+	infoBefore, err := os.Stat(tmpPath)
+	if err != nil {
+		return false, err
+	}
+
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vi"
+	}
+	editorCmd := exec.Command(editor, tmpPath) // #nosec G702,G204
+	editorCmd.Stdin = os.Stdin
+	editorCmd.Stdout = os.Stdout
+	editorCmd.Stderr = os.Stderr
+	editorCmd.Env = envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY", "SHH_PLAINTEXT", "SHH_ALLOWED_AGE_PLUGINS")
+	if err := editorCmd.Run(); err != nil {
+		return false, errors.Wrap(err, "editor")
+	}
+
+	infoAfter, err := os.Stat(tmpPath)
+	if err != nil {
+		return false, err
+	}
+	return !infoAfter.ModTime().Equal(infoBefore.ModTime()), nil
+}
+
+func readEdited(tmpPath string) (map[string]string, error) {
+	edited, err := os.ReadFile(tmpPath) // #nosec G304
+	if err != nil {
+		return nil, errors.Wrap(err, "read edited file")
+	}
+	return encfile.ParsePlaintext(string(edited)), nil
 }
