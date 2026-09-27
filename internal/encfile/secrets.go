@@ -2,12 +2,12 @@ package encfile
 
 import (
 	"crypto/hmac"
-	"sort"
 	"strings"
 
 	"github.com/cockroachdb/errors"
 
 	"github.com/stefanpenner/shh/internal/crypto"
+	"github.com/stefanpenner/shh/internal/envutil"
 )
 
 // verifyMAC checks the file MAC using the already-unwrapped dataKey.
@@ -26,15 +26,8 @@ func verifyMAC(ef *EncryptedFile, dataKey []byte) error {
 }
 
 func EncryptSecrets(secrets map[string]string, recipients map[string]string) (*EncryptedFile, error) {
-	if len(recipients) == 0 {
-		return nil, errors.New("at least one recipient is required")
-	}
-	// Fail closed before any plugin/X25519 wrap: untrusted maps may carry
-	// disallowed plugin recipients (same gate as Load/normalize).
-	for name, rec := range recipients {
-		if err := crypto.EnsureRecipientAllowed(rec); err != nil {
-			return nil, errors.Wrapf(err, "recipient %q", name)
-		}
+	if err := gateRecipients(recipients); err != nil {
+		return nil, err
 	}
 
 	dataKey, err := crypto.GenerateDataKey()
@@ -84,7 +77,7 @@ func resolveDataKey(ef *EncryptedFile, privateKey string) ([]byte, error) {
 		return dataKey, nil
 	}
 
-	if pubKey, err := publicKeyFrom(privateKey); err == nil {
+	if pubKey, err := crypto.PublicKeyFrom(privateKey); err == nil {
 		// Recipient is derivable (X25519): look the entry up by name.
 		for name, pk := range ef.Recipients {
 			if pk == pubKey {
@@ -99,22 +92,12 @@ func resolveDataKey(ef *EncryptedFile, privateKey string) ([]byte, error) {
 				return dataKey, nil
 			}
 		}
-		names := make([]string, 0, len(ef.Recipients))
-		for name := range ef.Recipients {
-			names = append(names, name)
-		}
-		sort.Strings(names)
 		return nil, errors.Newf("your key (%s) is not in the recipients list\n  authorized: %s\n  ask a teammate to run: shh users add <your-github-username>",
-			pubKey, strings.Join(names, ", "))
+			pubKey, strings.Join(envutil.SortedKeys(ef.Recipients), ", "))
 	}
 
 	// Plugin identity: recipient not derivable — trial-unwrap each entry.
-	wrappedNames := make([]string, 0, len(ef.WrappedKeys))
-	for name := range ef.WrappedKeys {
-		wrappedNames = append(wrappedNames, name)
-	}
-	sort.Strings(wrappedNames)
-	for _, name := range wrappedNames {
+	for _, name := range envutil.SortedKeys(ef.WrappedKeys) {
 		if dataKey, err := crypto.UnwrapDataKey(ef.WrappedKeys[name], privateKey); err == nil {
 			return dataKey, nil
 		}
@@ -148,13 +131,8 @@ func DecryptSecrets(ef *EncryptedFile, privateKey string) (map[string]string, er
 
 // ReWrapDataKey re-wraps the data key for a new set of recipients using the provided private key.
 func ReWrapDataKey(ef *EncryptedFile, newRecipients map[string]string, privateKey string) error {
-	if len(newRecipients) == 0 {
-		return errors.New("at least one recipient is required")
-	}
-	for name, rec := range newRecipients {
-		if err := crypto.EnsureRecipientAllowed(rec); err != nil {
-			return errors.Wrapf(err, "recipient %q", name)
-		}
+	if err := gateRecipients(newRecipients); err != nil {
+		return err
 	}
 
 	// Unwrap with the current identity — handles X25519 and plugin identities
@@ -186,16 +164,25 @@ func ReWrapDataKey(ef *EncryptedFile, newRecipients map[string]string, privateKe
 	return nil
 }
 
+// gateRecipients fails closed before any wrap. An empty set is rejected, and a
+// disallowed plugin recipient never reaches age's plugin exec.
+func gateRecipients(recipients map[string]string) error {
+	if len(recipients) == 0 {
+		return errors.New("at least one recipient is required")
+	}
+	for name, rec := range recipients {
+		if err := crypto.EnsureRecipientAllowed(rec); err != nil {
+			return errors.Wrapf(err, "recipient %q", name)
+		}
+	}
+	return nil
+}
+
 // DefaultRecipients creates a default recipients map from the given private key and GitHub username.
 func DefaultRecipients(privateKey string, ghUsername string) (map[string]string, error) {
-	pubKey, err := publicKeyFrom(privateKey)
+	pubKey, err := crypto.PublicKeyFrom(privateKey)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]string{"https://github.com/" + ghUsername: pubKey}, nil
-}
-
-// publicKeyFrom derives the public key from an age private key string.
-func publicKeyFrom(privateKey string) (string, error) {
-	return crypto.PublicKeyFrom(privateKey)
 }

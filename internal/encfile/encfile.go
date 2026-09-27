@@ -67,32 +67,27 @@ func Marshal(ef *EncryptedFile) ([]byte, error) {
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "version = %d\n", ef.Version)
 	fmt.Fprintf(&buf, "mac = %q\n", ef.MAC)
-
-	buf.WriteString("\n[recipients]\n")
-	for _, name := range envutil.SortedKeys(ef.Recipients) {
-		if err := validateTOMLValue(ef.Recipients[name]); err != nil {
-			return nil, errors.Wrapf(err, "recipient %q", name)
-		}
-		fmt.Fprintf(&buf, "%s = %q\n", tomlKey(name), ef.Recipients[name])
+	if err := writeTOMLTable(&buf, "recipients", "recipient", ef.Recipients); err != nil {
+		return nil, err
 	}
-
-	buf.WriteString("\n[wrapped_keys]\n")
-	for _, name := range envutil.SortedKeys(ef.WrappedKeys) {
-		if err := validateTOMLValue(ef.WrappedKeys[name]); err != nil {
-			return nil, errors.Wrapf(err, "wrapped key %q", name)
-		}
-		fmt.Fprintf(&buf, "%s = %q\n", tomlKey(name), ef.WrappedKeys[name])
+	if err := writeTOMLTable(&buf, "wrapped_keys", "wrapped key", ef.WrappedKeys); err != nil {
+		return nil, err
 	}
-
-	buf.WriteString("\n[secrets]\n")
-	for _, k := range envutil.SortedKeys(ef.Secrets) {
-		if err := validateTOMLValue(ef.Secrets[k]); err != nil {
-			return nil, errors.Wrapf(err, "secret %q", k)
-		}
-		fmt.Fprintf(&buf, "%s = %q\n", tomlKey(k), ef.Secrets[k])
+	if err := writeTOMLTable(&buf, "secrets", "secret", ef.Secrets); err != nil {
+		return nil, err
 	}
-
 	return buf.Bytes(), nil
+}
+
+func writeTOMLTable(buf *bytes.Buffer, section, label string, rows map[string]string) error {
+	fmt.Fprintf(buf, "\n[%s]\n", section)
+	for _, name := range envutil.SortedKeys(rows) {
+		if err := validateTOMLValue(rows[name]); err != nil {
+			return errors.Wrapf(err, "%s %q", label, name)
+		}
+		fmt.Fprintf(buf, "%s = %q\n", tomlKey(name), rows[name])
+	}
+	return nil
 }
 
 func Save(path string, ef *EncryptedFile) error {
@@ -110,15 +105,17 @@ func Save(path string, ef *EncryptedFile) error {
 		return errors.Wrap(err, "create temp file")
 	}
 	tmpName := tmp.Name()
-
-	if _, err := tmp.Write(data); err != nil {
+	discard := func() {
 		tmp.Close()        // #nosec G104 -- cleanup in error path
 		os.Remove(tmpName) // #nosec G104 -- best-effort cleanup
+	}
+
+	if _, err := tmp.Write(data); err != nil {
+		discard()
 		return errors.Wrap(err, "write temp file")
 	}
 	if err := tmp.Chmod(0600); err != nil {
-		tmp.Close()        // #nosec G104 -- cleanup in error path
-		os.Remove(tmpName) // #nosec G104 -- best-effort cleanup
+		discard()
 		return errors.Wrap(err, "chmod temp file")
 	}
 	if err := tmp.Close(); err != nil {

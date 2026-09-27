@@ -4,13 +4,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/cockroachdb/errors"
 
 	"github.com/stefanpenner/shh/internal/encfile"
 	"github.com/stefanpenner/shh/internal/keyring"
-	"github.com/stefanpenner/shh/internal/merge"
 	tmpl "github.com/stefanpenner/shh/internal/template"
 )
 
@@ -49,53 +47,43 @@ func cmdMerge(ancestorPath, oursPath, theirsPath string) error {
 		return err
 	}
 
-	ancestor, err := loadEncryptedFile(ancestorPath)
+	ancestor, ours, theirs, err := loadMergeSides(ancestorPath, oursPath, theirsPath)
 	if err != nil {
-		return errors.Wrap(err, "load ancestor")
-	}
-	ours, err := loadEncryptedFile(oursPath)
-	if err != nil {
-		return errors.Wrap(err, "load ours")
-	}
-	theirs, err := loadEncryptedFile(theirsPath)
-	if err != nil {
-		return errors.Wrap(err, "load theirs")
+		return err
 	}
 
-	// Decrypt all three
-	ancestorSecrets, err := encfile.DecryptSecrets(ancestor, privKey)
+	merged, err := encfile.MergeFile(ancestor, ours, theirs, privKey,
+		"shh merge: conflict on keys: %s", "re-encrypt merged secrets")
 	if err != nil {
-		return errors.Wrap(err, "decrypt ancestor")
-	}
-	oursSecrets, err := encfile.DecryptSecrets(ours, privKey)
-	if err != nil {
-		return errors.Wrap(err, "decrypt ours")
-	}
-	theirsSecrets, err := encfile.DecryptSecrets(theirs, privKey)
-	if err != nil {
-		return errors.Wrap(err, "decrypt theirs")
+		return err
 	}
 
-	// 3-way merge secrets
-	mergedSecrets, conflicts, mergeErr := merge.MergeSecrets(ancestorSecrets, oursSecrets, theirsSecrets)
-	if mergeErr != nil {
-		fmt.Fprintf(os.Stderr, "shh merge: conflict on keys: %s\n", strings.Join(conflicts, ", "))
-		os.Exit(1)
-	}
-
-	// Merge recipients (union, with deletion support)
-	mergedRecipients := merge.MergeStringMaps(ancestor.Recipients, ours.Recipients, theirs.Recipients)
-
-	// Re-encrypt with merged values
-	newEf, err := encfile.EncryptSecrets(mergedSecrets, mergedRecipients)
-	if err != nil {
-		return errors.Wrap(err, "re-encrypt merged secrets")
-	}
-
-	// Write result to the "ours" path (git convention)
-	if err := encfile.Save(oursPath, newEf); err != nil {
+	if err := encfile.Save(oursPath, merged); err != nil {
 		return errors.Wrap(err, "save merged file")
 	}
-
 	return nil
+}
+
+func loadMergeSides(ancestorPath, oursPath, theirsPath string) (*encfile.EncryptedFile, *encfile.EncryptedFile, *encfile.EncryptedFile, error) {
+	ancestor, err := loadSide(ancestorPath, "ancestor")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	ours, err := loadSide(oursPath, "ours")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	theirs, err := loadSide(theirsPath, "theirs")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return ancestor, ours, theirs, nil
+}
+
+func loadSide(path, label string) (*encfile.EncryptedFile, error) {
+	ef, err := loadEncryptedFile(path)
+	if err != nil {
+		return nil, errors.Wrap(err, "load "+label)
+	}
+	return ef, nil
 }

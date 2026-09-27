@@ -42,7 +42,7 @@ func usersListCmd() error {
 
 	var myKey string
 	if priv, err := keyring.GetKey(); err == nil {
-		myKey, _ = keyring.PublicKeyFrom(priv)
+		myKey, _ = crypto.PublicKeyFrom(priv)
 	}
 
 	fmt.Println(headerStyle.Render("Authorized users"))
@@ -60,137 +60,134 @@ func usersListCmd() error {
 	return nil
 }
 
-// usersAddOpts configures optional recovery QR emission for generated keys.
-type usersAddOpts struct {
-	QROut string // path to write PNG; empty = no file
-	QR    bool   // also print a small ANSI QR to stderr when generating a secret
-}
-
-func usersAddCmd(args []string, deployName, deployKey string, opts usersAddOpts) error {
-	var newKey, name string
-	var err error
-	var generatedSecret string // set when we mint an extractable age identity
-
-	if deployName != "" {
-		// Deploy key mode: --name provided
-		if err := envutil.ValidateEnvName(deployName); err != nil {
-			return errors.Wrapf(err, "invalid --name")
-		}
-		name = shhUserPrefix + deployName
-		if deployKey != "" {
-			// User provided a key — validate the encoding (X25519 or a plugin
-			// recipient such as a YubiKey/Secure Enclave key). Encoding-only, so
-			// no plugin binary or hardware is required just to add someone.
-			if err := crypto.ValidateRecipient(deployKey); err != nil {
-				return errors.Newf("invalid age public key %q: %v", deployKey, err)
-			}
-			newKey = deployKey
-		} else {
-			// Generate a new keypair
-			identity, err := age.GenerateX25519Identity()
-			if err != nil {
-				return errors.Wrap(err, "generate age key")
-			}
-			newKey = identity.Recipient().String()
-			generatedSecret = identity.String()
-			fmt.Println(hintStyle.Render("Secret key (store this in your CI/deploy platform as SHH_AGE_KEY):"))
-			fmt.Println()
-			fmt.Printf("  SHH_AGE_KEY=%s\n", generatedSecret)
-			fmt.Println()
-			fmt.Println(hintStyle.Render("This is the only time this key will be displayed."))
-			fmt.Println(hintStyle.Render("Hint: " + qr.ChecksumHint(generatedSecret) + " — eyeball-check on paper cards."))
-		}
-	} else if len(args) > 0 {
-		// GitHub / raw age key mode (existing behavior)
-		newKey, name, err = github.ResolveUserKey(args[0])
-		if err != nil {
-			return err
-		}
-	} else {
-		return errors.New("provide a GitHub username, age public key, or use --name for deploy keys")
-	}
-
-	file := envutil.FindEncFile()
-	var ef *encfile.EncryptedFile
-
-	privKey, err := keyring.GetKey()
+func usersAddCmd(args []string, deployName, deployKey, qrOut string, printQR bool) error {
+	newKey, name, generatedSecret, err := resolveAddRecipient(args, deployName, deployKey)
 	if err != nil {
 		return err
 	}
 
-	if _, err := os.Stat(file); err == nil {
-		ef, err = loadEncryptedFile(file)
-		if err != nil {
-			return err
-		}
-	} else {
-		// Create new empty file with current user
-		username, err := requireGHUsername()
-		if err != nil {
-			return err
-		}
-		recipients, err := encfile.DefaultRecipients(privKey, username)
-		if err != nil {
-			return err
-		}
-		ef, err = encfile.EncryptSecrets(map[string]string{}, recipients)
-		if err != nil {
-			return err
-		}
+	file := envutil.FindEncFile()
+	privKey, err := keyring.GetKey()
+	if err != nil {
+		return err
+	}
+	ef, err := loadOrCreateEnc(file, privKey)
+	if err != nil {
+		return err
 	}
 
-	// Check for duplicate key
 	for _, pk := range ef.Recipients {
 		if pk == newKey {
 			fmt.Println("User already present.")
 			return nil
 		}
 	}
-
-	// Check for name collision
 	if _, exists := ef.Recipients[name]; exists {
 		return errors.Newf("name %q already in use (specify a different name)", name)
 	}
 
-	// Add recipient and re-wrap data key
-	newRecipients := make(map[string]string, len(ef.Recipients)+1)
-	for k, v := range ef.Recipients {
-		newRecipients[k] = v
-	}
-	newRecipients[name] = newKey
-
-	if err := encfile.ReWrapDataKey(ef, newRecipients, privKey); err != nil {
-		return err
-	}
-
-	if err := encfile.Save(file, ef); err != nil {
+	if err := rewrapAndSave(file, ef, name, newKey, privKey); err != nil {
 		return err
 	}
 
 	fmt.Println(successStyle.Render(fmt.Sprintf("Added %s.", RecipientDisplayName(name))))
-
-	if generatedSecret != "" && (opts.QR || opts.QROut != "") {
-		if err := emitRecoveryQR(generatedSecret, opts); err != nil {
-			return err
-		}
-	} else if (opts.QR || opts.QROut != "") && generatedSecret == "" {
-		fmt.Println(hintStyle.Render("Note: --qr only applies when a new secret key is generated (omit --key)."))
-	}
-	return nil
+	return emitRecoveryQR(generatedSecret, qrOut, printQR)
 }
 
-// emitRecoveryQR writes a PNG and/or terminal hint for the recovery identity.
+// resolveAddRecipient returns the key and name to grant.
+// generatedSecret is set only when this call minted an extractable identity.
+func resolveAddRecipient(args []string, deployName, deployKey string) (string, string, string, error) {
+	if deployName != "" {
+		return deployRecipient(deployName, deployKey)
+	}
+	if len(args) > 0 {
+		key, name, err := github.ResolveUserKey(args[0])
+		return key, name, "", err
+	}
+	return "", "", "", errors.New("provide a GitHub username, age public key, or use --name for deploy keys")
+}
+
+func deployRecipient(deployName, deployKey string) (string, string, string, error) {
+	if err := envutil.ValidateEnvName(deployName); err != nil {
+		return "", "", "", errors.Wrapf(err, "invalid --name")
+	}
+	name := shhUserPrefix + deployName
+	if deployKey != "" {
+		// Encoding only (X25519 or a plugin recipient). No plugin binary or
+		// hardware is required just to add someone.
+		if err := crypto.ValidateRecipient(deployKey); err != nil {
+			return "", "", "", errors.Newf("invalid age public key %q: %v", deployKey, err)
+		}
+		return deployKey, name, "", nil
+	}
+
+	identity, err := age.GenerateX25519Identity()
+	if err != nil {
+		return "", "", "", errors.Wrap(err, "generate age key")
+	}
+	secret := identity.String()
+	fmt.Println(hintStyle.Render("Secret key (store this in your CI/deploy platform as SHH_AGE_KEY):"))
+	fmt.Println()
+	fmt.Printf("  SHH_AGE_KEY=%s\n", secret)
+	fmt.Println()
+	fmt.Println(hintStyle.Render("This is the only time this key will be displayed."))
+	fmt.Println(hintStyle.Render("Hint: " + qr.ChecksumHint(secret) + " — eyeball-check on paper cards."))
+	return identity.Recipient().String(), name, secret, nil
+}
+
+// loadOrCreateEnc loads the vault. Any stat failure is treated as missing:
+// seal openOrCreate's empty vault (current user is the first recipient).
+func loadOrCreateEnc(file, privKey string) (*encfile.EncryptedFile, error) {
+	if _, err := os.Stat(file); err == nil {
+		return loadEncryptedFile(file)
+	}
+
+	secrets, recipients, err := openOrCreate(file, privKey)
+	if err != nil {
+		return nil, err
+	}
+	return encfile.EncryptSecrets(secrets, recipients)
+}
+
+func rewrapAndSave(file string, ef *encfile.EncryptedFile, name, newKey, privKey string) error {
+	if err := encfile.ReWrapDataKey(ef, withRecipient(ef.Recipients, name, newKey), privKey); err != nil {
+		return err
+	}
+	return encfile.Save(file, ef)
+}
+
+func withRecipient(recipients map[string]string, name, key string) map[string]string {
+	out := make(map[string]string, len(recipients)+1)
+	for k, v := range recipients {
+		out[k] = v
+	}
+	out[name] = key
+	return out
+}
+
+// emitRecoveryQR writes a PNG and/or terminal hint for a minted identity.
 // The secret is never written to stdout as image bytes — file path only.
-func emitRecoveryQR(secret string, opts usersAddOpts) error {
-	if opts.QROut != "" {
-		if err := qr.EncodeFile(secret, opts.QROut); err != nil {
+// --qr with no minted secret prints a note and writes nothing.
+func emitRecoveryQR(secret, qrOut string, printQR bool) error {
+	if secret == "" {
+		if printQR || qrOut != "" {
+			fmt.Println(hintStyle.Render("Note: --qr only applies when a new secret key is generated (omit --key)."))
+		}
+		return nil
+	}
+	if !printQR && qrOut == "" {
+		return nil
+	}
+
+	if qrOut != "" {
+		if err := qr.EncodeFile(secret, qrOut); err != nil {
 			return errors.Wrap(err, "write QR PNG")
 		}
-		fmt.Println(successStyle.Render(fmt.Sprintf("QR written to %s (0600) — print or import to 1Password, then delete the file.", opts.QROut)))
+		fmt.Println(successStyle.Render(fmt.Sprintf("QR written to %s (0600) — print or import to 1Password, then delete the file.", qrOut)))
 	}
-	if opts.QR {
+	if printQR {
 		// Compact ANSI QR on stderr so stdout stays scriptable for SHH_AGE_KEY lines.
-		code, err := encodeANSI(secret)
+		code, err := qr.EncodeANSI(secret)
 		if err != nil {
 			return err
 		}
@@ -202,15 +199,7 @@ func emitRecoveryQR(secret string, opts usersAddOpts) error {
 	return nil
 }
 
-// encodeANSI is a thin wrapper so tests can stub if needed; uses Medium PNG
-// path is primary — ANSI is best-effort via go-qrcode's ToSmallString.
-func encodeANSI(payload string) (string, error) {
-	return qr.EncodeANSI(payload)
-}
-
 func usersRemoveCmd(args []string) error {
-	target := args[0]
-
 	file := envutil.FindEncFile()
 	ef, err := loadEncryptedFile(file)
 	if err != nil {
@@ -222,65 +211,23 @@ func usersRemoveCmd(args []string) error {
 		return err
 	}
 
-	// Resolve number to key
-	names := envutil.SortedKeys(ef.Recipients)
-	if n, err := strconv.Atoi(target); err == nil {
-		if n < 1 || n > len(names) {
-			return errors.Newf("invalid key number: %d", n)
-		}
-		target = ef.Recipients[names[n-1]]
+	removedName, target, err := recipientToRemove(ef.Recipients, args[0])
+	if err != nil {
+		return err
 	}
-
-	// Find and remove the key
-	// Collect all candidates: first try exact match (pk or full name), then display name.
-	var exactMatches []string
-	var displayMatches []string
-	for name, pk := range ef.Recipients {
-		if pk == target || name == target {
-			exactMatches = append(exactMatches, name)
-		} else if RecipientDisplayName(name) == target {
-			displayMatches = append(displayMatches, name)
-		}
-	}
-
-	// Prefer exact matches; fall back to display-name matches only when unambiguous.
-	var candidates []string
-	switch {
-	case len(exactMatches) > 0:
-		candidates = exactMatches
-	case len(displayMatches) == 1:
-		candidates = displayMatches
-	case len(displayMatches) > 1:
-		return errors.Newf("ambiguous match for %q: multiple recipients share that display name; use the full name (e.g. https://github.com/user) or public key instead", target)
-	}
-
-	if len(candidates) == 0 {
-		return errors.Newf("key not found: %s", target)
-	}
-
-	removedName := candidates[0]
-	newRecipients := make(map[string]string)
-	for name, pk := range ef.Recipients {
-		if name != removedName {
-			newRecipients[name] = pk
-		}
-	}
-
+	newRecipients := withoutRecipient(ef.Recipients, removedName)
 	if len(newRecipients) == 0 {
 		return errors.New("cannot remove the last key")
 	}
 
-	// Decrypt all secrets, then re-encrypt with a fresh data key.
 	secrets, err := encfile.DecryptSecrets(ef, privKey)
 	if err != nil {
 		return err
 	}
-
 	newEf, err := encfile.EncryptSecrets(secrets, newRecipients)
 	if err != nil {
 		return err
 	}
-
 	if err := encfile.Save(file, newEf); err != nil {
 		return err
 	}
@@ -288,4 +235,47 @@ func usersRemoveCmd(args []string) error {
 	fmt.Println(successStyle.Render(fmt.Sprintf("Removed key: %s (%s)", removedName, target)))
 	fmt.Println(hintStyle.Render("Data key rotated — all secrets re-encrypted."))
 	return nil
+}
+
+func recipientToRemove(recipients map[string]string, target string) (name, shown string, err error) {
+	names := envutil.SortedKeys(recipients)
+	if n, convErr := strconv.Atoi(target); convErr == nil {
+		if n < 1 || n > len(names) {
+			return "", "", errors.Newf("invalid key number: %d", n)
+		}
+		target = recipients[names[n-1]]
+	}
+
+	var exact, display []string
+	for recipientName, pk := range recipients {
+		if pk == target || recipientName == target {
+			exact = append(exact, recipientName)
+		} else if RecipientDisplayName(recipientName) == target {
+			display = append(display, recipientName)
+		}
+	}
+
+	var candidates []string
+	switch {
+	case len(exact) > 0:
+		candidates = exact
+	case len(display) == 1:
+		candidates = display
+	case len(display) > 1:
+		return "", "", errors.Newf("ambiguous match for %q: multiple recipients share that display name; use the full name (e.g. https://github.com/user) or public key instead", target)
+	}
+	if len(candidates) == 0 {
+		return "", "", errors.Newf("key not found: %s", target)
+	}
+	return candidates[0], target, nil
+}
+
+func withoutRecipient(recipients map[string]string, removedName string) map[string]string {
+	kept := make(map[string]string)
+	for name, pk := range recipients {
+		if name != removedName {
+			kept[name] = pk
+		}
+	}
+	return kept
 }

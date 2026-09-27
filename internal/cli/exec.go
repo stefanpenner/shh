@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"syscall"
@@ -13,20 +14,31 @@ import (
 	"github.com/stefanpenner/shh/internal/keyring"
 )
 
-// appendSecrets adds secret key=value pairs to env, skipping any keys in
-// DangerousEnvVars. This is defense-in-depth: the storage layer already
-// rejects dangerous keys, but a file crafted outside of `shh set`/`shh edit`
-// (e.g., via direct TOML manipulation by a rogue recipient, or via git merge)
-// could still contain them.
+// skipDangerous is defense-in-depth. Storage already rejects these keys, but a
+// file written outside shh set/edit (hand-edited TOML, a rogue recipient, a
+// merge) can still carry them.
+func skipDangerous(w io.Writer, key string) bool {
+	if !envutil.DangerousEnvVars[key] {
+		return false
+	}
+	fmt.Fprintf(w, "warning: skipping dangerous env var %q from secrets file\n", key)
+	return true
+}
+
 func appendSecrets(env []string, secrets map[string]string) []string {
 	for k, v := range secrets {
-		if envutil.DangerousEnvVars[k] {
-			fmt.Fprintf(os.Stderr, "warning: skipping dangerous env var %q from secrets file\n", k)
+		if skipDangerous(os.Stderr, k) {
 			continue
 		}
 		env = append(env, k+"="+v)
 	}
 	return env
+}
+
+// childEnv is the parent environment minus shh control variables, plus secrets.
+func childEnv(secrets map[string]string) []string {
+	env := envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY", "SHH_PLAINTEXT", "SHH_ALLOWED_AGE_PLUGINS")
+	return appendSecrets(env, secrets)
 }
 
 func cmdShell(file string) error {
@@ -35,7 +47,7 @@ func cmdShell(file string) error {
 		return err
 	}
 
-	env := appendSecrets(envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY", "SHH_PLAINTEXT", "SHH_ALLOWED_AGE_PLUGINS"), secrets)
+	env := childEnv(secrets)
 
 	shell := os.Getenv("SHELL")
 	if shell == "" {
@@ -95,7 +107,7 @@ func cmdRun(file string, args []string) error {
 		return err
 	}
 
-	env := appendSecrets(envutil.FilterEnv(os.Environ(), "SHH_AGE_KEY", "SHH_PLAINTEXT", "SHH_ALLOWED_AGE_PLUGINS"), secrets)
+	env := childEnv(secrets)
 
 	cmd := exec.Command(args[0], args[1:]...) // #nosec G204
 	cmd.Stdin = os.Stdin

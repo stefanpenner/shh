@@ -43,9 +43,19 @@ func TestEnvFlag(t *testing.T) {
 	assert.Equal(t, "staging.env.enc", EnvFlag("staging"))
 }
 
-func TestResolveFile(t *testing.T) {
-	assert.Equal(t, "production.env.enc", ResolveFile("production", []string{"other.enc"}))
-	assert.Equal(t, "other.enc", ResolveFile("", []string{"other.enc"}))
-	result := ResolveFile("", nil)
-	assert.NotEmpty(t, result)
+func TestResolveFileE(t *testing.T) {
+	got, err := ResolveFileE("production", []string{"other.enc"})
+	require.NoError(t, err)
+	assert.Equal(t, "production.env.enc", got)
+
+	got, err = ResolveFileE("", []string{"other.enc"})
+	require.NoError(t, err)
+	assert.Equal(t, "other.enc", got)
+
+	got, err = ResolveFileE("", nil)
+	require.NoError(t, err)
+	assert.NotEmpty(t, got)
+
+	_, err = ResolveFileE("../x", nil)
+	require.Error(t, err)
 }

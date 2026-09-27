@@ -12,18 +12,21 @@ func ShellQuote(s string) string {
 }
 
 func FilterEnv(env []string, remove ...string) []string {
-	var filtered []string
-	for _, e := range env {
-		skip := false
-		for _, r := range remove {
-			if strings.HasPrefix(e, r+"=") {
-				skip = true
-				break
-			}
+	var kept []string
+	for _, entry := range env {
+		if listedEnv(entry, remove) {
+			continue
 		}
-		if !skip {
-			filtered = append(filtered, e)
+		kept = append(kept, entry)
+	}
+	return kept
+}
+
+func listedEnv(entry string, remove []string) bool {
+	for _, name := range remove {
+		if strings.HasPrefix(entry, name+"=") {
+			return true
 		}
 	}
-	return filtered
+	return false
 }
