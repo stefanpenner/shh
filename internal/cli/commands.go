@@ -86,8 +86,7 @@ func cmdEnv(file string, stdout bool, stderr io.Writer) error {
 		return err
 	}
 	for _, k := range envutil.SortedKeys(secrets) {
-		if envutil.DangerousEnvVars[k] {
-			fmt.Fprintf(stderr, "warning: skipping dangerous env var %q from secrets file\n", k)
+		if skipDangerous(stderr, k) {
 			continue
 		}
 		fmt.Printf("export %s=%s\n", k, envutil.ShellQuote(secrets[k]))
