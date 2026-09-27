@@ -353,18 +353,19 @@ func newRootCmd() *cobra.Command {
 	return rootCmd
 }
 
-// loadEncryptedFile loads an encrypted file, attempting auto-resolve on parse failure.
+// loadEncryptedFile loads the file. On failure it tries a git auto-resolve, then returns the original error.
 func loadEncryptedFile(path string) (*encfile.EncryptedFile, error) {
 	ef, err := encfile.Load(path)
-	if err != nil {
-		// Check if this file is in a git merge conflict
-		privKey, keyErr := keyring.GetKey()
-		if keyErr == nil {
-			if resolved, resolveErr := encfile.TryAutoResolve(path, privKey); resolveErr == nil {
-				return resolved, nil
-			}
-		}
+	if err == nil {
+		return ef, nil
+	}
+	privKey, keyErr := keyring.GetKey()
+	if keyErr != nil {
 		return nil, err
 	}
-	return ef, nil
+	resolved, resolveErr := encfile.TryAutoResolve(path, privKey)
+	if resolveErr != nil {
+		return nil, err
+	}
+	return resolved, nil
 }
