@@ -13,6 +13,7 @@ import (
 
 	"github.com/stefanpenner/shh/internal/encfile"
 	"github.com/stefanpenner/shh/internal/envutil"
+	"github.com/stefanpenner/shh/internal/github"
 	"github.com/stefanpenner/shh/internal/keyring"
 )
 
@@ -35,7 +36,7 @@ func cmdEncrypt(src string) error {
 	if err != nil {
 		return err
 	}
-	username, err := requireGHUsername()
+	username, err := github.RequireUsername()
 	if err != nil {
 		return err
 	}
@@ -255,7 +256,7 @@ func openOrCreate(file, privKey string) (map[string]string, map[string]string, e
 		return secrets, ef.Recipients, nil
 	}
 
-	username, err := requireGHUsername()
+	username, err := github.RequireUsername()
 	if err != nil {
 		return nil, nil, err
 	}

@@ -31,10 +31,6 @@ func runLoginQRFile(path string) error {
 	return runLoginIdentityString(payload)
 }
 
-func requireGHUsername() (string, error) {
-	return github.RequireUsername()
-}
-
 // readSecret prompts on stderr and reads a line without echo. Overridable in
 // tests. Kept off stdout so piped secrets stay clean.
 var readSecret = func(prompt string) (string, error) {
@@ -150,18 +146,34 @@ func extractIdentity(content string) string {
 	return strings.TrimSpace(content)
 }
 
+// enrolledRecipient is the public key already in the keyring.
+// present is false when nothing is stored. err means no derivable
+// recipient: init returns it, login still prints.
+func enrolledRecipient() (string, bool, error) {
+	key, err := keyring.GetKey()
+	if err != nil {
+		return "", false, nil
+	}
+	pub, err := keyring.PublicKeyFrom(key)
+	return pub, true, err
+}
+
+func showStoredKey(lead, pub string) {
+	fmt.Println(lead)
+	fmt.Printf("  %s\n", keyStyle.Render(pub))
+}
+
 func runInit(cmd *cobra.Command, args []string) error {
-	if key, err := keyring.GetKey(); err == nil {
-		pubKey, err := keyring.PublicKeyFrom(key)
-		if err != nil {
-			return err
-		}
-		fmt.Println("Already initialized. Your public key:")
-		fmt.Printf("  %s\n", keyStyle.Render(pubKey))
+	pub, present, err := enrolledRecipient()
+	if err != nil {
+		return err
+	}
+	if present {
+		showStoredKey("Already initialized. Your public key:", pub)
 		return nil
 	}
 
-	username, err := requireGHUsername()
+	username, err := github.RequireUsername()
 	if err != nil {
 		return err
 	}
@@ -208,14 +220,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 }
 
 func runLogin(cmd *cobra.Command, args []string) error {
-	if key, err := keyring.GetKey(); err == nil {
-		pubKey, _ := keyring.PublicKeyFrom(key)
-		fmt.Println("Already logged in. Your public key:")
-		fmt.Printf("  %s\n", keyStyle.Render(pubKey))
+	pub, present, _ := enrolledRecipient()
+	if present {
+		showStoredKey("Already logged in. Your public key:", pub)
 		return nil
 	}
 
-	username, err := requireGHUsername()
+	username, err := github.RequireUsername()
 	if err != nil {
 		return err
 	}

@@ -125,7 +125,7 @@ func usersAddCmd(args []string, deployName, deployKey string, opts usersAddOpts)
 		}
 	} else {
 		// Create new empty file with current user
-		username, err := requireGHUsername()
+		username, err := github.RequireUsername()
 		if err != nil {
 			return err
 		}
