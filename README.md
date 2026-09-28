@@ -6,6 +6,28 @@ shh encrypts secret values into `.env.enc`. You can commit that file. The privat
 
 age is the public-key format. A recipient is an age public key. The data key is the 32-byte AES key for the values.
 
+## What to store
+
+Store a value only when you can change it at the provider.
+
+1. Create the new value at the provider before you disable the old value.
+2. Write the new value with `shh set`.
+3. Disable the old value at the provider.
+
+You can store an API token, a database password, or a cloud access key when the provider accepts two values that both work.
+
+`shh users remove` rotates the data key. It does not change the value. Git keeps every past `.env.enc`. A key that was a recipient at that time can still open that file.
+
+Change those values at the provider. A value you cannot change still works.
+
+Do not store a value in these cases.
+
+- The value is a seed phrase or a wallet private key. The old key can still sign.
+- The value is an account recovery code. A person who opens the vault can use that code on the account that can change the other values.
+- You already published the private key in a contract or in an app you cannot update.
+- The key encrypts data you cannot encrypt again. The old key can still decrypt that data.
+- The value is the age key, the recovery key, or the passphrase for this vault. The same passphrase makes the same key in every project.
+
 ## Install
 
 ```bash
@@ -29,7 +51,7 @@ go install github.com/stefanpenner/shh@latest
 
 `shh set KEY -` reads the value from stdin. The value does not enter shell history.
 
-`shh init` needs a GitHub login. `shh init` derives the age key from the first ed25519 file that it finds in `~/.ssh`. Directory order decides which file is first. With no ed25519 file, `shh init` generates a new age key.
+`shh init` derives the age key from the first ed25519 file in `~/.ssh`. Directory order decides which file is first. With no ed25519 file, `shh init` generates a new age key.
 
 ## Commands
 
@@ -58,7 +80,6 @@ go install github.com/stefanpenner/shh@latest
 The default file is `.env.enc`. `-e NAME` selects `NAME.env.enc`. You can pass a file path as the last argument.
 
 ```bash
-shh shell -e staging
 shh run -e production -- node app.js
 ```
 
@@ -88,9 +109,9 @@ Alice runs `shh login`, then `shh shell`.
 
 Use an extractable key for CI. Use a hardware key for daily work. Enroll two hardware keys when hardware is the recovery path. A hardware key has no copy.
 
-If an extractable key leaks, change the secret values at the provider. `shh users remove` rotates the data key. The values stay the same. The removed key can still open old files in git history.
+If an extractable key leaks, change the values at the provider. See [What to store](#what-to-store).
 
-`shh users list` marks each recipient. `[extractable]` means the rotation rule above applies.
+`shh users list` marks each recipient. `[extractable]` means that leak rule applies.
 
 ## Recovery QR
 
@@ -128,11 +149,9 @@ shh run -- node app.js
 
 shh removes `SHH_AGE_KEY` from the child environment.
 
-`shh users add --name staging --key age1…` adds a public key that you already have.
-
 ## Hardware
 
-Wrap to a plugin recipient needs the plugin program. Decrypt needs the device.
+Decrypt needs the device.
 
 ```bash
 brew install age-plugin-yubikey
@@ -179,7 +198,7 @@ More limits are in `SECURITY.md`.
 
 ## Paper
 
-`shh paper encode` gzip-compresses the encrypted vault and writes QR PNG files. One code holds 1,400 bytes of that gzip stream at high error correction. A smaller vault uses a smaller code. A larger vault uses the next code, up to 16. A 4,296-character code is larger, and this scanner does not read it reliably. The PNG files are mode `0600`.
+`shh paper encode` gzips the vault and writes QR PNG files. One code holds 1,400 bytes of that gzip stream at high error correction. A smaller vault uses a smaller code. A larger vault uses the next code, up to 16. A 4,296-character code is larger, and this scanner does not read it reliably. The PNG files are mode `0600`.
 
 ```bash
 shh paper encode --out shh-paper
