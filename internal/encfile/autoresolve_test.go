@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/stefanpenner/shh/internal/recipientmerge"
 )
 
 func gitRun(t *testing.T, dir string, args ...string) {
@@ -17,6 +19,9 @@ func gitRun(t *testing.T, dir string, args ...string) {
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
 		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=commit.gpgsign",
+		"GIT_CONFIG_VALUE_0=false",
 	)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git %v: %s", args, out)
@@ -121,4 +126,68 @@ func TestAutoResolve_Conflict_Fails(t *testing.T) {
 
 	_, err = TryAutoResolve(filepath.Join(dir, ".env.enc"), priv)
 	assert.Error(t, err)
+}
+
+func TestAutoResolve_RefusesRecipientChange(t *testing.T) {
+	dir := t.TempDir()
+	alicePriv, alicePub := generateTestKey(t)
+	_, recoveryPub := generateTestKey(t)
+	evePriv, evePub := generateTestKey(t)
+
+	baseRecipients := map[string]string{"alice": alicePub, "recovery": recoveryPub}
+	gitRun(t, dir, "init", "-b", "main")
+
+	base, err := EncryptSecrets(map[string]string{"BASE": "keep"}, baseRecipients)
+	require.NoError(t, err)
+	require.NoError(t, Save(filepath.Join(dir, ".env.enc"), base))
+	gitRun(t, dir, "add", ".env.enc")
+	gitRun(t, dir, "commit", "-m", "base")
+
+	gitRun(t, dir, "checkout", "-b", "ours")
+	ours, err := EncryptSecrets(map[string]string{"BASE": "keep", "LOCAL": "secret"}, baseRecipients)
+	require.NoError(t, err)
+	require.NoError(t, Save(filepath.Join(dir, ".env.enc"), ours))
+	gitRun(t, dir, "add", ".env.enc")
+	gitRun(t, dir, "commit", "-m", "local")
+
+	gitRun(t, dir, "checkout", "main")
+	gitRun(t, dir, "checkout", "-b", "theirs")
+	theirs, err := EncryptSecrets(
+		map[string]string{"BASE": "nope"},
+		map[string]string{"alice": alicePub, "eve": evePub},
+	)
+	require.NoError(t, err)
+	require.NoError(t, Save(filepath.Join(dir, ".env.enc"), theirs))
+	gitRun(t, dir, "add", ".env.enc")
+	gitRun(t, dir, "commit", "-m", "forged")
+
+	gitRun(t, dir, "checkout", "ours")
+	merge := exec.Command("git", "merge", "theirs")
+	merge.Dir = dir
+	merge.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=commit.gpgsign",
+		"GIT_CONFIG_VALUE_0=false",
+	)
+	out, err := merge.CombinedOutput()
+	require.Error(t, err, "expected a conflict: %s", out)
+
+	_, err = TryAutoResolve(filepath.Join(dir, ".env.enc"), alicePriv)
+	require.ErrorIs(t, err, recipientmerge.ErrSetsDiffer)
+
+	unmerged, err := exec.Command("git", "-C", dir, "ls-files", "-u", "--", ".env.enc").Output()
+	require.NoError(t, err)
+	require.NotEmpty(t, unmerged)
+
+	_, err = Load(filepath.Join(dir, ".env.enc"))
+	require.Error(t, err, "the work tree must stay conflicted")
+
+	stage, err := exec.Command("git", "-C", dir, "show", ":2:.env.enc").Output()
+	require.NoError(t, err)
+	oursFile, err := LoadFromBytes(stage)
+	require.NoError(t, err)
+	_, err = DecryptSecrets(oursFile, evePriv)
+	require.Error(t, err, "eve must not open the local side")
 }

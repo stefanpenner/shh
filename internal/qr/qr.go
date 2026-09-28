@@ -162,7 +162,7 @@ func EncodePNG(payload string, w io.Writer) error {
 	if err != nil {
 		return errors.Wrap(err, "qr encode")
 	}
-	return code.Write(512, w)
+	return code.Write(-8, w)
 }
 
 // EncodeFile writes a PNG QR to path (0600).
@@ -246,13 +246,36 @@ func DecodeImage(img image.Image) (string, error) {
 	if w > MaxImageDim || h > MaxImageDim {
 		return "", errors.Newf("image dimensions too large (%dx%d > %d)", w, h, MaxImageDim)
 	}
+	text, err := readQRText(img)
+	if err != nil {
+		return "", err
+	}
+	return ParseExtractableSecret(text)
+}
+
+func readQRText(img image.Image) (string, error) {
+	if img == nil {
+		return "", errors.New("nil image")
+	}
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w <= 0 || h <= 0 {
+		return "", errors.New("empty image bounds")
+	}
+	if w > MaxImageDim || h > MaxImageDim {
+		return "", errors.Newf("image dimensions too large (%dx%d > %d)", w, h, MaxImageDim)
+	}
 	bmp, err := gozxing.NewBinaryBitmapFromImage(img)
 	if err != nil {
 		return "", errors.Wrap(err, "qr bitmap")
 	}
-	result, err := qrcode.NewQRCodeReader().Decode(bmp, nil)
+	hints := map[gozxing.DecodeHintType]interface{}{
+		gozxing.DecodeHintType_PURE_BARCODE: true,
+		gozxing.DecodeHintType_TRY_HARDER:   true,
+	}
+	result, err := qrcode.NewQRCodeReader().Decode(bmp, hints)
 	if err != nil {
 		return "", errors.Wrap(err, "qr decode")
 	}
-	return ParseExtractableSecret(result.GetText())
+	return result.GetText(), nil
 }
