@@ -10,6 +10,7 @@ import (
 	"github.com/cockroachdb/errors"
 
 	"github.com/stefanpenner/shh/internal/merge"
+	"github.com/stefanpenner/shh/internal/recipientmerge"
 )
 
 // TryAutoResolve checks if a file is in a git merge conflict and resolves it.
@@ -59,6 +60,10 @@ func MergeFile(ancestor, ours, theirs *EncryptedFile, privateKey, conflictFmt, e
 }
 
 func decryptAndMerge(ancestor, ours, theirs *EncryptedFile, privateKey string) (map[string]string, map[string]string, []string, error) {
+	if _, _, err := recipientmerge.Decide(sameRecipients(ours.Recipients, theirs.Recipients)); err != nil {
+		return nil, nil, nil, err
+	}
+
 	ancestorSecrets, err := decryptSide(ancestor, privateKey, "ancestor")
 	if err != nil {
 		return nil, nil, nil, err
@@ -76,7 +81,7 @@ func decryptAndMerge(ancestor, ours, theirs *EncryptedFile, privateKey string) (
 	if err != nil {
 		return nil, nil, conflicts, err
 	}
-	return mergedSecrets, merge.MergeStringMaps(ancestor.Recipients, ours.Recipients, theirs.Recipients), nil, nil
+	return mergedSecrets, ours.Recipients, nil, nil
 }
 
 func decryptSide(ef *EncryptedFile, privateKey, label string) (map[string]string, error) {

@@ -15,9 +15,10 @@ import (
 	"github.com/stefanpenner/shh/internal/envutil"
 	"github.com/stefanpenner/shh/internal/github"
 	"github.com/stefanpenner/shh/internal/keyring"
+	"github.com/stefanpenner/shh/internal/vaultadmit"
 )
 
-func cmdEncrypt(src string) error {
+func cmdEncrypt(src string, accept bool) error {
 	if _, err := os.Stat(src); err != nil {
 		return errors.Newf("file not found: %s", src)
 	}
@@ -57,7 +58,7 @@ func cmdEncrypt(src string) error {
 		recipients = existing.Recipients
 	}
 
-	if err := saveSecrets(dest, secrets, recipients); err != nil {
+	if err := saveSecrets(dest, secrets, recipients, accept); err != nil {
 		return err
 	}
 
@@ -94,7 +95,7 @@ func cmdEnv(file string, stdout bool, stderr io.Writer) error {
 	return nil
 }
 
-func cmdEdit(file string) error {
+func cmdEdit(file string, accept bool) error {
 	privKey, err := keyring.GetKey()
 	if err != nil {
 		return err
@@ -102,6 +103,9 @@ func cmdEdit(file string) error {
 
 	secrets, recipients, err := openOrCreate(file, privKey)
 	if err != nil {
+		return err
+	}
+	if err := admitRecipients(file, recipients, accept); err != nil {
 		return err
 	}
 
@@ -128,10 +132,10 @@ func cmdEdit(file string) error {
 	if err := gateKeys(edited, editReopenNote); err != nil {
 		return err
 	}
-	return saveSecrets(file, edited, recipients)
+	return saveSecrets(file, edited, recipients, accept)
 }
 
-func cmdSet(file, key, value string) error {
+func cmdSet(file, key, value string, accept bool) error {
 	if err := gateKey(key, ""); err != nil {
 		return err
 	}
@@ -149,7 +153,7 @@ func cmdSet(file, key, value string) error {
 	_, existed := secrets[key]
 	secrets[key] = value
 
-	if err := saveSecrets(file, secrets, recipients); err != nil {
+	if err := saveSecrets(file, secrets, recipients, accept); err != nil {
 		return err
 	}
 
@@ -161,7 +165,7 @@ func cmdSet(file, key, value string) error {
 	return nil
 }
 
-func cmdRm(file, key string) error {
+func cmdRm(file, key string, accept bool) error {
 	privKey, err := keyring.GetKey()
 	if err != nil {
 		return err
@@ -176,7 +180,7 @@ func cmdRm(file, key string) error {
 	}
 	delete(secrets, key)
 
-	if err := saveSecrets(file, secrets, recipients); err != nil {
+	if err := saveSecrets(file, secrets, recipients, accept); err != nil {
 		return err
 	}
 	fmt.Println(successStyle.Render(fmt.Sprintf("Removed %s from %s.", key, file)))
@@ -256,12 +260,24 @@ func openExisting(file, privKey string) (map[string]string, map[string]string, e
 	return secrets, ef.Recipients, nil
 }
 
-func saveSecrets(file string, secrets, recipients map[string]string) error {
+func saveSecrets(file string, secrets, recipients map[string]string, accept bool) error {
+	if err := admitRecipients(file, recipients, accept); err != nil {
+		return err
+	}
 	ef, err := encfile.EncryptSecrets(secrets, recipients)
 	if err != nil {
 		return err
 	}
 	return encfile.Save(file, ef)
+}
+
+func admitRecipients(file string, recipients map[string]string, accept bool) error {
+	differs, err := encfile.RecipientsDifferFromHEAD(file, recipients)
+	if err != nil {
+		return err
+	}
+	_, _, err = vaultadmit.Decide(differs, accept)
+	return err
 }
 
 // writeEditTemp writes plaintext beside the encrypted file, not on a shared
