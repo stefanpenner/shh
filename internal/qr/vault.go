@@ -25,15 +25,15 @@ import (
 // body is base32 of one slice of the gzip stream. The sum binds the sheet.
 // It is not the vault MAC.
 //
-// One code may use QR version 40 at low error correction. That is 4,296
-// alphanumeric characters. The gzip payload in one code is 2,670 bytes.
-// A smaller stream uses a smaller version.
+// One code holds 1,400 bytes of the gzip stream at high error correction.
+// A smaller stream uses a smaller code. Low correction can hold 4,296
+// characters, and this scanner does not read that symbol reliably.
 const (
 	vaultMagic = "SHHENV1"
-	// rawChunk is the largest gzip slice whose version-40 code this reader
-	// scans. The QR standard allows 2,670 bytes here. Denser symbols decode
-	// as version 41 and fail.
-	rawChunk = 2580
+	// rawChunk is the largest gzip slice this reader scans reliably.
+	// High error correction is required. Low correction holds more bytes
+	// and the scanner misses the code.
+	rawChunk = 1400
 	// MaxParts caps a sheet so a hostile code cannot ask for a huge assembly.
 	MaxParts = 16
 	// MaxVaultBytes is the vault size before gzip.
@@ -181,7 +181,7 @@ func EncodeVaultPNGs(vault []byte) ([][]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		code, err := goqrcode.New(text, goqrcode.Low)
+		code, err := goqrcode.New(text, goqrcode.High)
 		if err != nil {
 			return nil, errors.Wrap(err, "qr encode")
 		}
@@ -189,7 +189,7 @@ func EncodeVaultPNGs(vault []byte) ([][]byte, error) {
 			return nil, errors.Newf("QR version %d is above the QR maximum", code.VersionNumber)
 		}
 		var buf bytes.Buffer
-		if err := code.Write(qrPixelSize(code.VersionNumber), &buf); err != nil {
+		if err := code.Write(-8, &buf); err != nil {
 			return nil, errors.Wrap(err, "qr png")
 		}
 		out = append(out, buf.Bytes())
@@ -259,15 +259,6 @@ func ReadVaultQRs(path string) ([]byte, error) {
 		return nil, err
 	}
 	return gunzipVault(packed)
-}
-
-func qrPixelSize(version int) int {
-	modules := 21 + (version-1)*4
-	px := (modules + 8) * 8
-	if px < 256 {
-		return 256
-	}
-	return px
 }
 
 func frameName(index int) string {

@@ -162,7 +162,7 @@ func EncodePNG(payload string, w io.Writer) error {
 	if err != nil {
 		return errors.Wrap(err, "qr encode")
 	}
-	return code.Write(512, w)
+	return code.Write(-8, w)
 }
 
 // EncodeFile writes a PNG QR to path (0600).
@@ -269,7 +269,11 @@ func readQRText(img image.Image) (string, error) {
 	if err != nil {
 		return "", errors.Wrap(err, "qr bitmap")
 	}
-	result, err := qrcode.NewQRCodeReader().Decode(bmp, nil)
+	hints := map[gozxing.DecodeHintType]interface{}{
+		gozxing.DecodeHintType_PURE_BARCODE: true,
+		gozxing.DecodeHintType_TRY_HARDER:   true,
+	}
+	result, err := qrcode.NewQRCodeReader().Decode(bmp, hints)
 	if err != nil {
 		return "", errors.Wrap(err, "qr decode")
 	}
