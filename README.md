@@ -6,6 +6,25 @@ shh encrypts secret values into `.env.enc`. You can commit that file. The privat
 
 age is the public-key format. A recipient is an age public key. The data key is the 32-byte AES key for the values.
 
+## When to use
+
+Use shh when a secrets server is too much. A small team shares one repository. People open the vault with age keys. A CI job can use one age key.
+
+[What to store](#what-to-store) names the values for the vault.
+
+Use a secrets server in these cases.
+
+- The value must expire.
+- Many applications share the same values.
+- You must record each read.
+- The reader is a cluster workload. It has a cloud role. It has no age key.
+
+A secrets server has one of these forms.
+
+- You run HashiCorp Vault or OpenBao.
+- Doppler, Infisical, Bitwarden Secrets Manager, and 1Password secrets automation host a secrets server.
+- AWS Secrets Manager, Google Secret Manager, and Azure Key Vault serve one cloud each.
+
 ## What to store
 
 Store a value only when you can change it at the provider.
