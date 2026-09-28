@@ -179,7 +179,7 @@ More limits are in `SECURITY.md`.
 
 ## Paper
 
-`shh paper encode` gzip-compresses the encrypted vault and writes QR PNG files. One code holds 2,580 bytes of that gzip stream. The code is version 40 at low error correction. The symbol is 4,149 characters. The QR standard allows 4,296 characters. This reader fails above 2,580 bytes. A smaller vault uses a smaller code. A larger vault uses the next code, up to 16. The PNG files are mode `0600`.
+`shh paper encode` gzip-compresses the encrypted vault and writes QR PNG files. One code holds 1,400 bytes of that gzip stream at high error correction. A smaller vault uses a smaller code. A larger vault uses the next code, up to 16. A 4,296-character code is larger, and this scanner does not read it reliably. The PNG files are mode `0600`.
 
 ```bash
 shh paper encode --out shh-paper
