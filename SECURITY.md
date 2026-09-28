@@ -1,209 +1,114 @@
-# Security Design
+# Security
 
-This document explains the security architecture of `shh`: the encrypted file format, cryptographic choices, trust model, and what the system does and does not protect against.
+shh encrypts values in `.env.enc`. You can commit that file. shh does not prove who wrote it. Git review is that control.
 
-## Recovery QR (paper / 1Password)
+## Terms
 
-QR codes carry an **extractable** age secret (`AGE-SECRET-KEY-…`) for cold recovery only.
+| Term | Meaning |
+| --- | --- |
+| Vault | The file `.env.enc`. |
+| Data key | The 32-byte AES key inside the vault. |
+| Recipient | An age public key that can open the data key. |
+| MAC | HMAC-SHA256 over the vault fields. The key is the data key. |
+| age | The public-key format used to wrap the data key. |
 
-| Control | Why |
-|---|---|
-| Encode only cryptographically valid secrets | No accidental QR of URLs, passphrases, or env dumps |
-| Decode rejects `http(s)://`, `javascript:`, `data:` | Blocks “quishing” (phishing via QR) |
-| Image size / dimension caps | Hostile oversized images |
-| File mode `0600` on `--qr-out` | Limit local file exposure |
-| Login uses string enroll (not path re-read) | Secret string that looks like a path is not opened as a file |
-| High error correction | Paper print + phone camera |
+## File
 
-**Operator duties (not enforced by code):** treat QR/paper like a master key; prefer 1Password; delete PNG after import; never commit QR images.
+The vault is TOML. `version` is `2`. shh still reads version `1`. Unknown versions fail.
 
-Formal lifecycle model: `specs/RecoveryQR.tla`. Fuzz: `go test ./internal/qr/ -fuzz=…`.
+`recipients` maps a name to an age public key. Names and public keys are plaintext.
 
-## Encrypted File Format (`.env.enc`)
+`wrapped_keys` holds one wrapped copy of the data key per recipient.
 
-The `.env.enc` file is plain TOML with five sections:
+`secrets` maps a name to AES-256-GCM ciphertext. The name binds the value. A swapped value fails open. Names are plaintext.
 
-```toml
-version = 2
-mac = "513417edad3bfd08..."
+shh draws the data key and each nonce from `crypto/rand`.
 
-[recipients]
-"https://github.com/alice" = "age1abc..."
-"https://github.com/bob" = "age1def..."
+## MAC
 
-[wrapped_keys]
-"https://github.com/alice" = "YWdlLWVuY3J5cHRpb24..."
-"https://github.com/bob" = "YWdlLWVuY3J5cHRpb24..."
+shh opens the data key, checks the MAC, then opens secret values. `hmac.Equal` compares the MAC.
 
-[secrets]
-API_KEY = "EU8FFxADNGlY..."
-```
+A partial edit fails that check. The attacker does not have the data key, so the attacker cannot write a valid MAC for that edit.
 
-### `version`
+A full replacement is different. The public recipients are in the file. A person who can replace the file can mint a new data key, wrap it to those recipients, and write a new MAC. Decrypt succeeds. `shh set`, `shh edit`, `shh rm`, and `shh encrypt` stop when the recipient set differs from `HEAD`. `--accept-recipients` writes that set after you review it.
 
-**What:** Integer format version (currently `2`; v1 files are still readable for backward compatibility).
+A current recipient can also edit the vault and recompute the MAC. That person already has the data key.
 
-**Why:** Allows future changes to the file format, encryption scheme, or MAC construction without silently misinterpreting old files. On load, `shh` rejects any version it doesn't understand.
+`shh doctor` does not check the MAC.
 
-### `mac`
+## People
 
-**What:** Hex-encoded HMAC-SHA256 digest.
+`shh users add` wraps the same data key for the new recipient. Old values stay readable by the new recipient.
 
-**Why:** Detects tampering with any part of the file. The MAC covers every field — version, per-recipient wrapped keys, recipients (names and public keys), and all secret entries (names and ciphertext). An attacker who modifies any byte causes MAC verification to fail.
+`shh users remove` mints a new data key and encrypts the values again. The removed key cannot open the new file. The values do not change. Change them at the provider when an extractable key leaks or leaves. Old git blobs stay readable by a key that was a recipient at that time.
 
-**How:** Computed with HMAC-SHA256, keyed by the data key itself. Fields are fed in deterministic sorted order with null-byte separators to prevent ambiguity between adjacent values. Verified using `hmac.Equal()` (constant-time comparison) to prevent timing side-channels.
+shh refuses to remove the last recipient.
 
-**What it prevents:**
-- Adding, removing, or modifying recipients without detection
-- Altering encrypted secret values or key names
-- Changing the version or any wrapped data key
-- Downgrade attacks (changing version to exploit a hypothetical older parser)
+## Plugins
 
-**Circular protection:** An attacker cannot recompute the MAC because the MAC key (the data key) is itself encrypted under age — only authorized recipients can unwrap it.
+A recipient string can name an age plugin. shh allows `yubikey` and `se` by default. `SHH_ALLOWED_AGE_PLUGINS` adds names for the current process. A secret in the vault cannot set that name.
 
-### `[wrapped_keys]`
+Parse does not start a program. Wrap and decrypt start `age-plugin-<name>` from `PATH`. Put those programs in a directory that you trust.
 
-**What:** A TOML table mapping recipient names to base64-encoded age-encrypted blobs, each containing the same random 32-byte AES-256 data key.
+## GitHub
 
-**Why:** Envelope encryption with per-recipient key wrapping. A single symmetric data key encrypts all secrets, and that key is individually wrapped with age (X25519 HPKE) for each recipient. This means:
+`shh users add NAME` requests `https://github.com/NAME.keys` over HTTPS. Redirects must stay on `github.com`. The limit is 3 redirects, 30 seconds, and 1 MiB. shh uses the first `ssh-ed25519` line. It does not ask you to compare a fingerprint.
 
-- Adding a user re-wraps the data key for the expanded recipient list — existing secret ciphertext doesn't change.
-- Removing a user generates a **new** data key, re-encrypts all secrets, and wraps only for remaining recipients. The removed user's knowledge of the old data key becomes useless.
-- Each recipient can only unwrap their own copy of the data key. Cross-decryption (using one recipient's wrapped key with another's private key) fails.
+`shh init` and `shh login` can derive an age key from an ed25519 file in `~/.ssh`. They use the first file that they find. Directory order is the rule.
 
-**How:** The 32-byte data key is generated from `crypto/rand`. For each recipient, it is independently encrypted with `filippo.io/age` to that recipient's public key, then base64-encoded. On decryption, the user's private age identity (stored in the OS keyring) unwraps their specific entry.
+## Child environment
 
-**Key rotation:** The data key is rotated on every `users remove` operation. On `users add`, the same data key is re-wrapped to include the new recipient (no re-encryption of secrets needed since the new user is being granted access to the current secrets).
+`shh run` and `shh shell` inject vault names into the child. shh drops `SHH_AGE_KEY`, `SHH_PLAINTEXT`, and `SHH_ALLOWED_AGE_PLUGINS` from that child.
 
-**v1 compatibility:** Version 1 files used a single `data_key` field wrapped for all recipients at once. `shh` can still read and decrypt v1 files but always writes v2 format with per-recipient `[wrapped_keys]`.
+shh also skips a fixed list of dangerous names, on write and on inject. The list includes `PATH`, `LD_PRELOAD`, `BASH_ENV`, `NODE_OPTIONS`, and `JAVA_TOOL_OPTIONS`. It does not include every name that can start a program. `LD_AUDIT`, `GIT_SSH_COMMAND`, and `TAR_OPTIONS` are examples that are still absent.
 
-### `[recipients]`
+`shh env` quotes values with POSIX single quotes. You must pass `--stdout`.
 
-**What:** A TOML table mapping human-readable names to age public keys (`age1...`).
+## Passphrase
 
-**Why:** Defines who can decrypt. Each entry is a name (typically `https://github.com/<username>`) paired with an age X25519 public key (validated against `^age1[a-z0-9]{58}$`).
+argon2id uses 256 MiB, time 3, and 4 threads. The salt is the public label `shh-brainkey-v1`. Do not change those parameters. The same phrase yields the same key in every project.
 
-**How recipients are added:**
-1. `shh users add alice` fetches `https://github.com/alice.keys` over HTTPS
-2. Finds the first `ssh-ed25519` public key
-3. Converts it to an age public key via `ssh-to-age`
-4. Stores the mapping in this section and re-wraps the data key
+The vault is public. A weak phrase allows an offline guess. Use 8 generated diceware words. Enrollment rejects a phrase shorter than 12 characters. That floor does not measure entropy.
 
-**Access control:** During decryption, `shh` checks that the user's public key appears in this map before attempting to unwrap the data key. This is a fast-fail check — the real cryptographic enforcement is that age will refuse to decrypt for a key that wasn't in the recipient list during encryption.
+See `docs/passphrase-security.md`.
 
-**What's visible:** Recipient names and public keys are **not encrypted**. Anyone with access to the file can see who has access. This is intentional — it enables `shh users list` without requiring decryption and allows teams to audit access via code review.
+## Recovery QR
 
-### `[secrets]`
+The QR payload is an extractable age secret. shh rejects URLs and other non-keys. shh limits image size. `--qr-out` writes mode `0600`.
 
-**What:** A TOML table mapping environment variable names to base64-encoded AES-256-GCM ciphertext.
+Treat the PNG, the terminal QR, and the printed page as the private key. Remove the PNG after import. Do not commit it.
 
-**Why:** Each secret is encrypted independently so that the file format remains a simple key-value map. Secret **names are visible** (they're TOML keys); only **values are encrypted**.
+## Edit file
 
-**How each value is encrypted:**
-1. A fresh 12-byte random nonce is generated from `crypto/rand`
-2. The plaintext is encrypted with AES-256-GCM using the data key
-3. The secret's key name (e.g., `API_KEY`) is passed as Additional Authenticated Data (AAD)
-4. The output is `nonce || ciphertext || GCM-tag`, base64-encoded
+`shh edit` writes plaintext to `.shh-edit-*.env` beside the vault. The mode is `0600`. Do not commit that file. A normal exit removes it. `SIGKILL` can leave it.
 
-**Why AAD matters:** The key name bound as AAD means an attacker cannot swap encrypted values between different keys. Moving the ciphertext from `API_KEY` to `DB_PASSWORD` causes GCM authentication to fail because the AAD won't match.
+## Writes
 
-**Why names are plaintext:** This is a deliberate tradeoff. Visible names let teams see which secrets exist, diff changes in code review, and detect missing configuration — without needing to decrypt. If secret names are themselves sensitive, this is a known limitation.
+shh writes a temp file in the same directory, sets mode `0600`, and renames it over the vault. Two writers do not lock the file. The last writer wins.
 
-## Cryptographic Primitives
+## Plaintext bypass
 
-| Purpose | Algorithm | Why |
-|---------|-----------|-----|
-| Per-value encryption | AES-256-GCM | Authenticated encryption; GCM provides confidentiality + integrity + AAD support |
-| Key wrapping | age (X25519 HPKE) | Modern, audited, multi-recipient asymmetric encryption |
-| File integrity | HMAC-SHA256 | Keyed hash covers all fields; prevents tampering |
-| Key generation | `crypto/rand` | OS-level CSPRNG; 32 bytes for AES key, 12 bytes per nonce |
-| MAC comparison | `hmac.Equal()` | Constant-time; prevents timing attacks |
-| Key storage | OS keyring | macOS Keychain, GNOME Secret Service, Windows Credential Manager |
+`SHH_PLAINTEXT` names a plaintext file. shh skips decrypt and prints a warning on stderr. A parent environment can set this. The vault cannot set it for a child.
 
-## Trust Model
+## Trust
 
-`shh` trusts the following:
+shh trusts these parties:
 
-1. **GitHub as an identity provider.** When you run `shh users add alice`, you trust that `github.com/alice.keys` returns Alice's real SSH public key. If Alice's GitHub account is compromised, the attacker's key gets added instead.
+- GitHub, for the SSH keys behind `shh users add`.
+- The OS keyring, for the private key.
+- The git host, for who may change `.env.enc`.
+- The local machine. A person who can read your user memory can read open secrets.
 
-2. **The OS keyring.** Private age keys are stored in the system keyring (macOS Keychain, etc.), protected by the OS's access controls and the user's login credentials.
-
-3. **Repository access controls.** Anyone who can push to the repo can modify `.env.enc`. Git history provides an audit trail of changes, but `shh` itself does not enforce who may add or remove recipients — that's the repository's job.
-
-4. **The local machine.** Decrypted secrets exist in memory (and briefly in a temp file during `shh edit`). `shh` sets file permissions to `0600` and cleans up temp files, but cannot protect against a compromised OS, malware with keyring access, or physical memory inspection.
-
-## What shh Protects Against
-
-| Threat | Defense |
-|--------|---------|
-| Unauthorized decryption | Only recipients listed in the file can unwrap the data key |
-| File tampering (any field) | HMAC-SHA256 verification fails |
-| Swapping encrypted values between keys | GCM AAD (key name) causes authentication failure |
-| Removed user accessing new secrets | Full data key rotation on removal; old key cannot unwrap new data key |
-| Privilege escalation via env vars | Denylist blocks `PATH`, `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, etc. |
-| Shell injection via secret values | `shellQuote()` uses POSIX single-quoting; no shell expansion possible |
-| MITM on GitHub key fetch | HTTPS-only; redirects restricted to `github.com`; 30s timeout; 1MB response limit |
-| Timing attacks on MAC verification | `hmac.Equal()` (constant-time) |
-| Partial file writes / corruption | Atomic write (temp file + rename); `0600` permissions |
-
-## What shh Does NOT Protect Against
-
-| Threat | Why |
-|--------|-----|
-| Compromised GitHub account | `shh` trusts GitHub as the source of SSH public keys |
-| Secrets the removed user already saw | Removal rotates the key, but the user had legitimate access before removal |
-| Secret names being confidential | Key names are stored in plaintext (intentional design tradeoff) |
-| `shh set KEY value` visible in `ps` | Command-line arguments are visible to other processes on the same machine; use `shh edit` for sensitive values |
-| SIGKILL during `shh edit` | Temp file cleanup runs on SIGINT/SIGTERM but not SIGKILL; file has `0600` permissions as mitigation |
-| Memory forensics | Decrypted secrets are Go strings in GC-managed memory; not explicitly zeroed |
-| Concurrent writes | No file locking; last writer wins (git merge conflicts surface this) |
-
-## Tricky Scenarios
-
-**Removed user has old `.env.enc` from git history.**
-They can decrypt the old version (they were authorized then) but not the current one. The data key was rotated on removal and all secrets re-encrypted.
-
-**Attacker edits `.env.enc` to add themselves as a recipient.**
-MAC verification fails on next decrypt. The attacker cannot recompute the MAC because the MAC key is the data key, which they can't unwrap without already being a recipient.
-
-**Two people run `shh set` at the same time.**
-Last writer wins. The second write overwrites the first. Git will show a merge conflict if both are committed, surfacing the issue.
-
-**Secret value contains `$(command)` or backticks.**
-Safe. `shh env` wraps values in POSIX single quotes (`'...'`), which prevent all shell expansion. The value is stored and returned literally.
-
-**User adds the same person twice under different names.**
-Duplicate public key check prevents this. `shh` rejects the addition with "User already present."
-
-**`SHH_AGE_KEY` is set in CI and echoes to logs.**
-The key is compromised. `shh` filters `SHH_AGE_KEY` from child processes (editor, shell) but cannot control the parent CI environment. Mark it as a masked/secret variable in your CI system.
-
-## File Write Safety
-
-Encrypted files are written atomically:
-1. Content is written to a temp file (`.shh-*.tmp`) in the same directory
-2. Permissions are set to `0600` before the file is closed
-3. The temp file is renamed over the target (atomic on POSIX)
-4. On any error, the temp file is removed (best-effort cleanup)
-
-This prevents partial writes from corrupting the encrypted file.
-
-## Network Security
-
-GitHub SSH key fetches use a hardened HTTP client:
-- HTTPS only (rejects `http://` redirects)
-- Redirects only to `github.com` (rejects other hosts)
-- Maximum 3 redirects
-- 30-second timeout
-- 1MB response size limit
-- No authentication required (GitHub's public key endpoint is intentionally public)
-
-## Input Validation
-
-| Input | Pattern | Rejects |
-|-------|---------|---------|
-| Age public keys | `^age1[a-z0-9]{58}$` | Malformed keys, injection attempts |
-| GitHub usernames | `^[a-zA-Z0-9]([a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$` | Path traversal, special characters |
-| Env var names | `^[A-Za-z_][A-Za-z0-9_]*$` | Shell metacharacters, empty names |
-| TOML values | No control characters (0x00–0x1F except tab/newline) | TOML injection, null bytes |
-| Dangerous env vars | Denylist: `PATH`, `HOME`, `SHELL`, `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, etc. | Privilege escalation via env |
+## What shh does not do
+
+| Limit | Result |
+| --- | --- |
+| Full file replacement | Decrypt can succeed for the public recipients. |
+| Recipient with the data key | That person can recompute the MAC. |
+| Secret already seen | Removal does not change the upstream value. |
+| Git history | An old recipient can open the old blob. |
+| Secret names | Names stay plaintext. |
+| `shh set KEY value` | Other users on the machine can see the argument. Use `shh set KEY -`. |
+| `shh doctor` | A broken MAC can still look healthy. |
+| Conflict merge | A recipient mismatch stops the merge. `shh users` changes the set. |
+| Memory | Go does not wipe the data key or the plaintext. |

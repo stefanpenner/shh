@@ -13,6 +13,7 @@ import (
 	"github.com/stefanpenner/shh/internal/encfile"
 	"github.com/stefanpenner/shh/internal/envutil"
 	"github.com/stefanpenner/shh/internal/keyring"
+	"github.com/stefanpenner/shh/internal/recipientmerge"
 )
 
 func Execute() {
@@ -35,6 +36,10 @@ func mustString(cmd *cobra.Command, name string) string {
 
 func envFlag(cmd *cobra.Command) {
 	cmd.Flags().StringP("env", "e", "", "Environment name (e.g. production → production.env.enc)")
+}
+
+func acceptFlag(cmd *cobra.Command) {
+	cmd.Flags().Bool("accept-recipients", false, "Write even when the recipient set differs from HEAD")
 }
 
 func encFile(cmd *cobra.Command, args []string) (string, error) {
@@ -141,14 +146,16 @@ func newRootCmd() *cobra.Command {
 		},
 	})
 
-	rootCmd.AddCommand(&cobra.Command{
+	encryptCmd := &cobra.Command{
 		Use:   "encrypt <file>",
 		Short: "Encrypt a .env file",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdEncrypt(args[0])
+			return cmdEncrypt(args[0], mustBool(cmd, "accept-recipients"))
 		},
-	})
+	}
+	acceptFlag(encryptCmd)
+	rootCmd.AddCommand(encryptCmd)
 
 	listCmd := &cobra.Command{
 		Use:   "list [file]",
@@ -191,10 +198,11 @@ func newRootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return cmdEdit(file)
+			return cmdEdit(file, mustBool(cmd, "accept-recipients"))
 		},
 	}
 	envFlag(editCmd)
+	acceptFlag(editCmd)
 	rootCmd.AddCommand(editCmd)
 
 	setCmd := &cobra.Command{
@@ -211,10 +219,11 @@ func newRootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return cmdSet(file, args[0], value)
+			return cmdSet(file, args[0], value, mustBool(cmd, "accept-recipients"))
 		},
 	}
 	envFlag(setCmd)
+	acceptFlag(setCmd)
 	rootCmd.AddCommand(setCmd)
 
 	rmCmd := &cobra.Command{
@@ -227,10 +236,11 @@ func newRootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return cmdRm(file, args[0])
+			return cmdRm(file, args[0], mustBool(cmd, "accept-recipients"))
 		},
 	}
 	envFlag(rmCmd)
+	acceptFlag(rmCmd)
 	rootCmd.AddCommand(rmCmd)
 
 	getCmd := &cobra.Command{
@@ -359,6 +369,40 @@ func newRootCmd() *cobra.Command {
 	}
 	rootCmd.AddCommand(templateCmd)
 
+	paperCmd := &cobra.Command{
+		Use:   "paper",
+		Short: "Print or scan the encrypted vault as QR codes",
+	}
+	encodePaper := &cobra.Command{
+		Use:   "encode [file]",
+		Short: "Write the encrypted vault as printable QR PNG files",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			file, err := encFile(cmd, args)
+			if err != nil {
+				return err
+			}
+			out, _ := cmd.Flags().GetString("out")
+			return cmdPaperEncode(file, out)
+		},
+	}
+	envFlag(encodePaper)
+	encodePaper.Flags().String("out", "shh-paper", "Directory for the QR PNG files (mode 0600)")
+	paperCmd.AddCommand(encodePaper)
+
+	decodePaper := &cobra.Command{
+		Use:   "decode <png-or-dir>",
+		Short: "Restore an encrypted vault from printed QR codes",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out, _ := cmd.Flags().GetString("out")
+			return cmdPaperDecode(args[0], out)
+		},
+	}
+	decodePaper.Flags().String("out", "", "Path for the restored vault (must not already exist)")
+	paperCmd.AddCommand(decodePaper)
+	rootCmd.AddCommand(paperCmd)
+
 	return rootCmd
 }
 
@@ -374,6 +418,9 @@ func loadEncryptedFile(path string) (*encfile.EncryptedFile, error) {
 	}
 	resolved, resolveErr := encfile.TryAutoResolve(path, privKey)
 	if resolveErr != nil {
+		if errors.Is(resolveErr, recipientmerge.ErrSetsDiffer) {
+			return nil, resolveErr
+		}
 		return nil, err
 	}
 	return resolved, nil
