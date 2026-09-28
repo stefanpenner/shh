@@ -25,4 +25,4 @@ This project stores secrets in `.env.enc`. Commit that file. Do not commit a pla
 - After `shh users remove` of an extractable key, change the secret values at the provider. Rotation does not change those values.
 - Do not print `SHH_AGE_KEY`.
 - `-e NAME` selects `NAME.env.enc`. The default file is `.env.enc`.
-- If git reports a conflict in `.env.enc`, read `shh users list` before you commit. The merge can add or remove a recipient.
+- If git reports a conflict in `.env.enc` and the recipient sets differ, the merge stops. Change recipients with `shh users`.

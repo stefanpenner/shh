@@ -35,7 +35,7 @@ func TestCLI_E2E_SecretsAndUsersAndQR(t *testing.T) {
 	assert.Equal(t, "k1", sec["API_KEY"])
 
 	// set additional secret
-	require.NoError(t, cmdSet(".env.enc", "NEW_TOKEN", "tok123"))
+	require.NoError(t, cmdSet(".env.enc", "NEW_TOKEN", "tok123", false))
 	sec, err = encfile.LoadSecrets(".env.enc", alicePriv)
 	require.NoError(t, err)
 	assert.Equal(t, "tok123", sec["NEW_TOKEN"])
@@ -68,7 +68,7 @@ func TestCLI_E2E_SecretsAndUsersAndQR(t *testing.T) {
 	assert.Contains(t, err.Error(), "last")
 
 	// dangerous key rejected at set
-	err = cmdSet(".env.enc", "LD_PRELOAD", "evil.so")
+	err = cmdSet(".env.enc", "LD_PRELOAD", "evil.so", false)
 	require.Error(t, err)
 
 	// run injects secrets, filters SHH_AGE_KEY from child (smoke via printenv)

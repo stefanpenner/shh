@@ -30,7 +30,7 @@ shh opens the data key, checks the MAC, then opens secret values. `hmac.Equal` c
 
 A partial edit fails that check. The attacker does not have the data key, so the attacker cannot write a valid MAC for that edit.
 
-A full replacement is different. The public recipients are in the file. A person who can replace the file can mint a new data key, wrap it to those recipients, and write a new MAC. Decrypt succeeds. `shh set`, `shh edit`, and `shh rm` then keep that recipient set.
+A full replacement is different. The public recipients are in the file. A person who can replace the file can mint a new data key, wrap it to those recipients, and write a new MAC. Decrypt succeeds. `shh set`, `shh edit`, `shh rm`, and `shh encrypt` stop when the recipient set differs from `HEAD`. `--accept-recipients` writes that set after you review it.
 
 A current recipient can also edit the vault and recompute the MAC. That person already has the data key.
 
@@ -110,5 +110,5 @@ shh trusts these parties:
 | Secret names | Names stay plaintext. |
 | `shh set KEY value` | Other users on the machine can see the argument. Use `shh set KEY -`. |
 | `shh doctor` | A broken MAC can still look healthy. |
-| Conflict merge | Recipients can appear or disappear. Read the list before you commit. |
+| Conflict merge | A recipient mismatch stops the merge. `shh users` changes the set. |
 | Memory | Go does not wipe the data key or the plaintext. |

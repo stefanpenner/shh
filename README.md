@@ -44,6 +44,8 @@ go install github.com/stefanpenner/shh@latest
 | `shell` | Start a shell with the values. |
 | `run -- CMD` | Start a command with the values. |
 | `template FILE` | Replace `{{NAME}}` and print the file. |
+| `paper encode` | Gzip the vault and write QR PNG files. |
+| `paper decode` | Restore the vault from those QR PNG files. |
 | `encrypt FILE` | Encrypt a plaintext env file to `FILE.enc`. |
 | `doctor` | Check the local setup. |
 | `whoami` | Show your public key. |
@@ -169,11 +171,26 @@ Use 8 generated diceware words. Enrollment rejects a phrase shorter than 12 char
 | `secrets` | AES-256-GCM values. The name binds each value. |
 | `mac` | HMAC-SHA256 over those fields. The MAC key is the data key. |
 
-A partial edit fails the MAC check. A person who can replace the file can write a new valid file for the public recipients. Review recipient changes in git. `shh doctor` does not check the MAC.
+A partial edit fails the MAC check. A person who can replace the file can write a new valid file for the public recipients. `shh set`, `shh edit`, `shh rm`, and `shh encrypt` stop when that recipient set differs from `HEAD`. Pass `--accept-recipients` after you review `shh users list`. `shh doctor` does not check the MAC.
 
 `SHH_PLAINTEXT` selects a plaintext file and skips decrypt. shh prints a warning on stderr.
 
 More limits are in `SECURITY.md`.
+
+## Paper
+
+`shh paper encode` gzip-compresses the encrypted vault and writes QR PNG files. One code holds 2,580 bytes of that gzip stream. The code is version 40 at low error correction. The symbol is 4,149 characters. The QR standard allows 4,296 characters. This reader fails above 2,580 bytes. A smaller vault uses a smaller code. A larger vault uses the next code, up to 16. The PNG files are mode `0600`.
+
+```bash
+shh paper encode --out shh-paper
+shh paper decode shh-paper --out restored.env.enc
+```
+
+Print the sheet. Scan every code. Decode writes a new file. It does not replace a file that already exists.
+
+The sheet is a copy of `.env.enc`. It does not show secret values. A person who scans it still needs a private key. Remove the PNG files after you print them. Do not commit them.
+
+`shh paper encode` refuses a plaintext env file.
 
 ## Merge
 
@@ -189,9 +206,9 @@ Each write rewrites `.env.enc`. Git can report a conflict.
 - `login`
 - `whoami`
 
-The merge adds a recipient that exists on only one side. The merge removes a recipient that either side removed. Two values for one name stop the merge.
+The merge stops when the recipient sets differ. It does not add or remove a recipient. Two values for one name also stop the merge.
 
-Run `shh users list` before you commit the merged file.
+Add or remove a person with `shh users`. Then merge again.
 
 ```bash
 # .gitattributes
