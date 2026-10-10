@@ -121,7 +121,7 @@ Alice runs `shh login`, then `shh shell`.
 
 ## iCloud Keychain
 
-The age identity can also live in iCloud Keychain. The login keychain stays the offline copy. `.env.enc` stays in git. Passwords.app is not the store.
+The age identity lives in one iCloud Keychain item, account `shh`. The login keychain is a cache. A signed `shh` reads the cloud item and replaces the cache. Logout writes `revoked` and the next signed get on each Mac clears that Mac's cache. An offline `shh` cannot store or log out. `.env.enc` stays in git.
 
 The access group is `7E2J46XA8A.shh`. The team id is `T93925EZUT`. The Mac App ID prefix is `7E2J46XA8A`. A group that starts with the team id is not in the profile. `SecItemAdd` for `T93925EZUT.shh` returns OSStatus -34018.
 
@@ -133,7 +133,7 @@ xcodebuild -project /tmp/shh-mac-profile/ShhProbe.xcodeproj -scheme ShhProbe -co
 
 The bundle id is `network.penner.shh`. Xcode writes `Mac Team Provisioning Profile: *` for platform `OSX`. On this Mac the file is `~/Library/Developer/Xcode/UserData/Provisioning Profiles/d7604141-267b-4ae1-91e7-2ca0977f34dc.provisionprofile`. The profile allows `7E2J46XA8A.*`.
 
-`shh login` writes the login item and the iCloud item when the signed binary has `macos/entitlements.plist`. On start, a missing login item is copied from iCloud. `shh logout` removes both items when that entitlement is present. An unsigned binary keeps the old login-keychain path.
+`shh login` writes the iCloud item, then the login item, when the signed binary has `macos/entitlements.plist`. A missing cloud item is filled from the login item once. `shh logout` writes `revoked`. An unsigned binary reads the login cache and returns an error for login and logout.
 
 ## Keys
 
