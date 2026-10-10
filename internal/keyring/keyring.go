@@ -12,6 +12,12 @@ import (
 
 const keychainService = "shh-age-key"
 
+// syncAccount is the one iCloud slot. It is not the unix user name.
+const syncAccount = "shh"
+
+// revokedMark is the cloud value after logout. It is not an age identity.
+const revokedMark = "revoked"
+
 // syncAccessGroup is the Mac App ID prefix plus ".shh".
 // This team's prefix is YOUR_PREFIX. The Team ID YOUR_TEAM_ID is not a valid group.
 const syncAccessGroup = "YOUR_PREFIX.shh"
@@ -90,17 +96,30 @@ func GetKey() (string, error) {
 	return getFor(envutil.CurrentUsername())
 }
 
+func missingKey() error {
+	return errors.New("no key found (run 'shh init')")
+}
+
 func getFor(account string) (string, error) {
-	key, err := localStore.Get(keychainService, account)
-	if err == nil {
-		return key, nil
+	synced, serr := syncStore.Get(keychainService, syncAccount)
+	if serr == nil {
+		return takeCloud(account, synced)
 	}
-	if !errors.Is(err, errNotFound) {
-		return "", err
+	if errors.Is(serr, errSyncUnavailable) {
+		return localKey(account)
 	}
-	synced, serr := syncStore.Get(keychainService, account)
-	if serr != nil {
-		return "", errors.New("no key found (run 'shh init')")
+	if !errors.Is(serr, errNotFound) {
+		return "", serr
+	}
+	return adoptLocal(account)
+}
+
+func takeCloud(account, synced string) (string, error) {
+	if synced == revokedMark {
+		if err := clearLocal(account); err != nil {
+			return "", err
+		}
+		return "", missingKey()
 	}
 	if err := crypto.ValidateIdentity(synced); err != nil {
 		return "", errors.New("icloud keychain identity is not a valid age private key")
@@ -111,19 +130,52 @@ func getFor(account string) (string, error) {
 	return synced, nil
 }
 
+func adoptLocal(account string) (string, error) {
+	key, err := localStore.Get(keychainService, account)
+	if errors.Is(err, errNotFound) {
+		return "", missingKey()
+	}
+	if err != nil {
+		return "", err
+	}
+	if err := crypto.ValidateIdentity(key); err != nil {
+		return "", errors.New("keyring identity is not a valid age private key")
+	}
+	if err := syncStore.Set(keychainService, syncAccount, key); err != nil {
+		if errors.Is(err, errSyncUnavailable) {
+			return key, nil
+		}
+		return "", errors.Wrap(err, "icloud keychain")
+	}
+	return key, nil
+}
+
+func localKey(account string) (string, error) {
+	key, err := localStore.Get(keychainService, account)
+	if errors.Is(err, errNotFound) {
+		return "", missingKey()
+	}
+	return key, err
+}
+
+func clearLocal(account string) error {
+	err := localStore.Delete(keychainService, account)
+	if err == nil || errors.Is(err, errNotFound) {
+		return nil
+	}
+	return err
+}
+
 func StoreKey(privateKey string) error {
 	return storeFor(envutil.CurrentUsername(), privateKey)
 }
 
 func storeFor(account, privateKey string) error {
-	if err := localStore.Set(keychainService, account, privateKey); err != nil {
-		return err
-	}
-	if err := syncStore.Set(keychainService, account, privateKey); err != nil {
-		if errors.Is(err, errSyncUnavailable) {
-			return nil
-		}
+	if err := syncStore.Set(keychainService, syncAccount, privateKey); err != nil {
 		return errors.Wrap(err, "icloud keychain")
+	}
+	if err := localStore.Set(keychainService, account, privateKey); err != nil {
+		return errors.Wrap(err, "keyring store")
 	}
 	return nil
 }
@@ -133,18 +185,21 @@ func DeleteKey() error {
 }
 
 func deleteFor(account string) error {
-	localErr := localStore.Delete(keychainService, account)
-	syncErr := syncStore.Delete(keychainService, account)
-	localMissing := errors.Is(localErr, errNotFound)
-	syncGone := syncErr == nil || errors.Is(syncErr, errNotFound) || errors.Is(syncErr, errSyncUnavailable)
-	if localErr != nil && !localMissing {
-		return localErr
+	synced, serr := syncStore.Get(keychainService, syncAccount)
+	if serr != nil && !errors.Is(serr, errNotFound) {
+		return errors.Wrap(serr, "icloud keychain")
 	}
-	if !syncGone {
-		return errors.Wrap(syncErr, "icloud keychain")
+	_, lerr := localStore.Get(keychainService, account)
+	if lerr != nil && !errors.Is(lerr, errNotFound) {
+		return lerr
 	}
-	if localMissing && syncErr != nil {
+	cloudEmpty := errors.Is(serr, errNotFound) || synced == revokedMark
+	localEmpty := errors.Is(lerr, errNotFound)
+	if cloudEmpty && localEmpty {
 		return errNotFound
 	}
-	return nil
+	if err := syncStore.Set(keychainService, syncAccount, revokedMark); err != nil {
+		return errors.Wrap(err, "icloud keychain")
+	}
+	return clearLocal(account)
 }

@@ -71,23 +71,23 @@ func TestStoreWritesLocalAndSync(t *testing.T) {
 	require.NoError(t, storeFor("alice", "probe-not-a-secret"))
 	gotLocal, err := local.Get(keychainService, "alice")
 	require.NoError(t, err)
-	gotSync, err := sync.Get(keychainService, "alice")
+	gotSync, err := sync.Get(keychainService, syncAccount)
 	require.NoError(t, err)
 	if gotLocal != "probe-not-a-secret" || gotSync != "probe-not-a-secret" {
 		t.Fatalf("store mismatch local len %d sync len %d", len(gotLocal), len(gotSync))
 	}
+	_, err = sync.Get(keychainService, "alice")
+	require.ErrorIs(t, err, errNotFound)
 }
 
-func TestStoreSucceedsWhenSyncUnavailable(t *testing.T) {
+func TestStoreLeavesLocalWhenSyncUnavailable(t *testing.T) {
 	local, sync := newMem(), newMem()
 	sync.setErr = errSyncUnavailable
 	useStores(t, local, sync)
-	require.NoError(t, storeFor("alice", "probe-not-a-secret"))
-	got, err := local.Get(keychainService, "alice")
-	require.NoError(t, err)
-	if got != "probe-not-a-secret" {
-		t.Fatalf("local len %d", len(got))
-	}
+	err := storeFor("alice", "probe-not-a-secret")
+	require.ErrorIs(t, err, errSyncUnavailable)
+	_, err = local.Get(keychainService, "alice")
+	require.ErrorIs(t, err, errNotFound)
 }
 
 func TestGetCopiesSyncWhenLocalMissing(t *testing.T) {
@@ -97,7 +97,7 @@ func TestGetCopiesSyncWhenLocalMissing(t *testing.T) {
 	t.Cleanup(func() { secret = "" })
 
 	local, sync := newMem(), newMem()
-	require.NoError(t, sync.Set(keychainService, "alice", secret))
+	require.NoError(t, sync.Set(keychainService, syncAccount, secret))
 	useStores(t, local, sync)
 
 	got, err := getFor("alice")
@@ -112,57 +112,122 @@ func TestGetCopiesSyncWhenLocalMissing(t *testing.T) {
 	}
 }
 
-func TestGetKeepsLocalWhenPresent(t *testing.T) {
+func TestGetCloudReplacesStaleLocal(t *testing.T) {
+	older := mustIdentity(t)
+	newer := mustIdentity(t)
 	local, sync := newMem(), newMem()
-	require.NoError(t, local.Set(keychainService, "alice", "local-probe"))
-	require.NoError(t, sync.Set(keychainService, "alice", "sync-probe"))
+	require.NoError(t, local.Set(keychainService, "alice", older))
+	require.NoError(t, sync.Set(keychainService, syncAccount, newer))
 	useStores(t, local, sync)
 	got, err := getFor("alice")
 	require.NoError(t, err)
-	if got != "local-probe" {
-		t.Fatalf("preferred sync over local, len %d", len(got))
+	if got != newer {
+		t.Fatal("get kept the stale login item")
+	}
+	cached, err := local.Get(keychainService, "alice")
+	require.NoError(t, err)
+	if cached != newer {
+		t.Fatal("login item stayed stale")
 	}
 }
 
 func TestGetRejectsInvalidSyncValue(t *testing.T) {
 	local, sync := newMem(), newMem()
-	require.NoError(t, sync.Set(keychainService, "alice", "probe-not-a-secret"))
+	require.NoError(t, sync.Set(keychainService, syncAccount, "probe-not-a-secret"))
+	require.NoError(t, local.Set(keychainService, "alice", mustIdentity(t)))
 	useStores(t, local, sync)
 	_, err := getFor("alice")
 	require.Error(t, err)
-	_, localErr := local.Get(keychainService, "alice")
-	require.ErrorIs(t, localErr, errNotFound)
+	cached, localErr := local.Get(keychainService, "alice")
+	require.NoError(t, localErr)
+	if cached == "probe-not-a-secret" {
+		t.Fatal("invalid cloud value replaced the login item")
+	}
 }
 
 func TestDeleteRemovesBoth(t *testing.T) {
 	local, sync := newMem(), newMem()
 	require.NoError(t, local.Set(keychainService, "alice", "probe-not-a-secret"))
-	require.NoError(t, sync.Set(keychainService, "alice", "probe-not-a-secret"))
+	require.NoError(t, sync.Set(keychainService, syncAccount, "probe-not-a-secret"))
 	useStores(t, local, sync)
 	require.NoError(t, deleteFor("alice"))
 	_, err := local.Get(keychainService, "alice")
 	require.ErrorIs(t, err, errNotFound)
-	_, err = sync.Get(keychainService, "alice")
-	require.ErrorIs(t, err, errNotFound)
+	mark, err := sync.Get(keychainService, syncAccount)
+	require.NoError(t, err)
+	if mark != revokedMark {
+		t.Fatalf("cloud mark len %d", len(mark))
+	}
+	_, err = getFor("alice")
+	require.Error(t, err)
 }
 
-func TestDeleteLocalOnlyWhenSyncUnavailable(t *testing.T) {
+func TestDeleteOfflineLeavesBoth(t *testing.T) {
 	local, sync := newMem(), newMem()
 	require.NoError(t, local.Set(keychainService, "alice", "probe-not-a-secret"))
-	sync.delErr = errSyncUnavailable
+	require.NoError(t, sync.Set(keychainService, syncAccount, "probe-not-a-secret"))
+	sync.getErr = errSyncUnavailable
 	useStores(t, local, sync)
-	require.NoError(t, deleteFor("alice"))
-	_, err := local.Get(keychainService, "alice")
-	require.ErrorIs(t, err, errNotFound)
+	err := deleteFor("alice")
+	require.ErrorIs(t, err, errSyncUnavailable)
+	sync.getErr = nil
+	_, err = local.Get(keychainService, "alice")
+	require.NoError(t, err)
+	got, err := sync.Get(keychainService, syncAccount)
+	require.NoError(t, err)
+	if got != "probe-not-a-secret" {
+		t.Fatal("offline logout changed the cloud item")
+	}
 }
 
 func TestDeleteSyncWhenLocalMissing(t *testing.T) {
 	local, sync := newMem(), newMem()
-	require.NoError(t, sync.Set(keychainService, "alice", "probe-not-a-secret"))
+	require.NoError(t, sync.Set(keychainService, syncAccount, "probe-not-a-secret"))
 	useStores(t, local, sync)
 	require.NoError(t, deleteFor("alice"))
-	_, err := sync.Get(keychainService, "alice")
+	mark, err := sync.Get(keychainService, syncAccount)
+	require.NoError(t, err)
+	if mark != revokedMark {
+		t.Fatalf("cloud mark len %d", len(mark))
+	}
+}
+
+func TestRevokeClearsOtherLoginOnGet(t *testing.T) {
+	secret := mustIdentity(t)
+	local, sync := newMem(), newMem()
+	require.NoError(t, local.Set(keychainService, "alice", secret))
+	require.NoError(t, local.Set(keychainService, "bob", secret))
+	require.NoError(t, sync.Set(keychainService, syncAccount, secret))
+	useStores(t, local, sync)
+	require.NoError(t, deleteFor("alice"))
+	_, err := getFor("bob")
+	require.Error(t, err)
+	_, err = local.Get(keychainService, "bob")
 	require.ErrorIs(t, err, errNotFound)
+}
+
+func TestAdoptPublishesLocalWhenCloudEmpty(t *testing.T) {
+	secret := mustIdentity(t)
+	local, sync := newMem(), newMem()
+	require.NoError(t, local.Set(keychainService, "alice", secret))
+	useStores(t, local, sync)
+	got, err := getFor("alice")
+	require.NoError(t, err)
+	if got != secret {
+		t.Fatal("adopt dropped the login identity")
+	}
+	published, err := sync.Get(keychainService, syncAccount)
+	require.NoError(t, err)
+	if published != secret {
+		t.Fatal("adopt did not publish")
+	}
+}
+
+func mustIdentity(t *testing.T) string {
+	t.Helper()
+	ident, err := age.GenerateX25519Identity()
+	require.NoError(t, err)
+	return ident.String()
 }
 
 func TestDeleteMissing(t *testing.T) {
