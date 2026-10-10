@@ -119,6 +119,22 @@ Alice runs `shh login`, then `shh shell`.
 
 `shh users add NAME` reads `https://github.com/NAME.keys`. It uses the first `ssh-ed25519` line. `shh users add --key age1…` uses an age public key that you supply.
 
+## iCloud Keychain
+
+The age identity can also live in iCloud Keychain. The login keychain stays the offline copy. `.env.enc` stays in git. Passwords.app is not the store.
+
+The access group is `YOUR_PREFIX.shh`. The team id is `YOUR_TEAM_ID`. The Mac App ID prefix is `YOUR_PREFIX`. A group that starts with the team id is not in the profile. `SecItemAdd` for `YOUR_TEAM_ID.shh` returns OSStatus -34018.
+
+Create the profile after you accept the Apple Developer Program License Agreement. The command that worked:
+
+```bash
+xcodebuild -project /tmp/shh-mac-profile/ShhProbe.xcodeproj -scheme ShhProbe -configuration Debug -destination 'platform=macOS' -allowProvisioningUpdates CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=YOUR_TEAM_ID build
+```
+
+The bundle id is `com.example.shh`. Xcode writes `Mac Team Provisioning Profile: *` for platform `OSX`. On this Mac the file is `~/Library/Developer/Xcode/UserData/Provisioning Profiles/YOUR_PROFILE_UUID.provisionprofile`. The profile allows `YOUR_PREFIX.*`.
+
+`shh login` writes the login item and the iCloud item when the signed binary has `macos/entitlements.plist`. On start, a missing login item is copied from iCloud. `shh logout` removes both items when that entitlement is present. An unsigned binary keeps the old login-keychain path.
+
 ## Keys
 
 | Kind | Private key | CI | Lost device |
