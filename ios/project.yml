@@ -1,0 +1,53 @@
+name: ShhIOS
+options:
+  bundleIdPrefix: network.penner
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    DEVELOPMENT_TEAM: T93925EZUT
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1"
+targets:
+  ShhIOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: ShhIOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: network.penner.shh.ios
+        CODE_SIGN_ENTITLEMENTS: ShhIOS/ShhIOS.entitlements
+        INFOPLIST_FILE: ShhIOS/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        OTHER_LDFLAGS: "-ObjC"
+        ENABLE_TESTABILITY: YES
+    dependencies:
+      - framework: ShhCore.xcframework
+        embed: false
+  ShhIOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: ShhIOSTests
+    dependencies:
+      - target: ShhIOS
+      - framework: ShhCore.xcframework
+        embed: false
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: network.penner.shh.ios.tests
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/ShhIOS.app/ShhIOS
+        BUNDLE_LOADER: $(TEST_HOST)
+schemes:
+  ShhIOS:
+    build:
+      targets:
+        ShhIOS: all
+        ShhIOSTests: [test]
+    test:
+      targets:
+        - ShhIOSTests

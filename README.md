@@ -135,6 +135,18 @@ The bundle id is `network.penner.shh`. Xcode writes `Mac Team Provisioning Profi
 
 `shh login` writes the iCloud item, then the login item, when the signed binary has `macos/entitlements.plist`. A missing cloud item is filled from the login item once. `shh logout` writes `revoked`. An unsigned binary reads the login cache and returns an error for login and logout.
 
+## iPhone
+
+`ios/ShhIOS` reads that same iCloud item. Face ID unlocks the read. The app opens one `.env.enc` from Files. iOS can also hand the app that file. The file waits until the key is unlocked. A canceled unlock keeps the file. Lock drops it. The screen follows that file. It shows `[recipients]` and `[secrets]`. It hides wrapped keys. A GitHub recipient shows the name and opens that profile. An `shh-user://` name shows the label. An age key stays on the device. The unlocked screen shows your public key. Copy public key stays on this device and does not expire. Secret names stay visible. A value reads Tap to view until a tap. Copy puts that value on a local clipboard for 30 seconds. Hide covers the value. A failed open does not show the raw error or the key. Lock drops the key. The app does not write the key. The app does not add or remove recipients. The app does not log out. A debug build can open a sample vault. That sample is not the iCloud key.
+
+The bundle id is `network.penner.shh.ios`. The keychain group is `$(AppIdentifierPrefix)shh`, which is `7E2J46XA8A.shh` for this team.
+
+```bash
+ios/build-core.sh
+xcodegen generate --spec ios/project.yml
+xcodebuild -project ios/ShhIOS.xcodeproj -scheme ShhIOS -destination 'platform=iOS Simulator,name=iPhone 16' test
+```
+
 ## Keys
 
 | Kind | Private key | CI | Lost device |
