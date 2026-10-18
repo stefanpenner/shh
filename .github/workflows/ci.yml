@@ -32,3 +32,24 @@ jobs:
 
       - name: Build
         run: go build -o shh${{ runner.os == 'Windows' && '.exe' || '' }} .
+
+  release-builds:
+    # The release (goreleaser) cross-compiles with CGO_ENABLED=0. Build those
+    # targets here so a cgo-only file cannot break a tag again (v0.8.0).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: true
+
+      - name: Cross-compile the release targets without cgo
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            GOOS=${t%/*} GOARCH=${t#*/} go build -o /dev/null . || exit 1
+            echo "ok $t"
+          done
