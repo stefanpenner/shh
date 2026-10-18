@@ -216,6 +216,23 @@ shh login --identity se-key.txt
 
 On wrap or decrypt, shh runs `age-plugin-yubikey` or `age-plugin-se` from `PATH`. The default allowlist is `yubikey` and `se`. `SHH_ALLOWED_AGE_PLUGINS` adds names for that process.
 
+### Tag keys (TPM, machines)
+
+age 1.3 tag recipients (`age1tag1…`, `age1tagpq1…`) are native in age. shh wraps to them without running a plugin and without the allowlist. A TPM key from `age-plugin-tpm` is one:
+
+```bash
+shh users add --name ser9 --key age1tag1…
+```
+
+A Go program that holds the identity in process can read the vault with the `vault` package. It never runs a plugin binary and checks the MAC before it returns.
+
+```go
+id, _ := plugin.NewTPMTagIdentity(tpm, handle) // age-plugin-tpm
+v, err := vault.Open(file, id)                  // github.com/stefanpenner/shh/vault
+defer v.Close()
+value, err := v.Secret("NAME")
+```
+
 ## Passphrase
 
 ```bash
