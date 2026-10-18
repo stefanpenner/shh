@@ -1,4 +1,4 @@
-//go:build darwin && icloudlive
+//go:build darwin && cgo && icloudlive
 
 package keyring
 
