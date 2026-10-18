@@ -7,6 +7,7 @@ import (
 
 	"filippo.io/age"
 	"filippo.io/age/plugin"
+	"filippo.io/age/tag"
 	"github.com/cockroachdb/errors"
 )
 
@@ -40,6 +41,9 @@ func requireAllowedPlugin(name string) error {
 // solely to stop a disallowed plugin name (from an untrusted file) reaching age's
 // plugin exec; use it at load time without rejecting otherwise-handled inputs.
 func EnsureRecipientAllowed(s string) error {
+	if IsTagRecipient(s) {
+		return nil // native in age, no plugin exec
+	}
 	if name, _, err := plugin.ParseRecipient(s); err == nil {
 		return requireAllowedPlugin(name)
 	}
@@ -65,11 +69,27 @@ func pluginUI() *plugin.ClientUI {
 	return plugin.NewTerminalUI(toStderr, toStderr)
 }
 
+// IsTagRecipient reports whether s is an age 1.3 tag recipient: age1tag1…
+// (P-256) or age1tagpq1… (ML-KEM-768 + P-256). age encrypts to these natively,
+// so no plugin binary runs. The private key lives in hardware: a TPM
+// (age-plugin-tpm), a YubiKey, or the Secure Enclave. Decrypting still needs
+// that hardware's identity.
+func IsTagRecipient(s string) bool {
+	_, err := tag.ParseRecipient(s)
+	return err == nil
+}
+
 // ParseRecipient parses an age recipient, supporting plugin recipients (e.g.
-// age1yubikey1…, age1se1…) as well as native X25519 (age1…). A plugin recipient
-// requires its plugin binary to be installed (but not the hardware — encrypting
-// to a recipient is public-key only).
+// age1yubikey1…, age1se1…) as well as native X25519 (age1…) and native tag
+// recipients (age1tag1…, age1tagpq1…). A plugin recipient requires its plugin
+// binary to be installed (but not the hardware — encrypting to a recipient is
+// public-key only). A tag recipient needs neither.
 func ParseRecipient(s string) (age.Recipient, error) {
+	// Tag recipients look like plugin recipients ("tag" and "tagpq"), so check
+	// them first. age wraps to them itself: no exec, no allowlist.
+	if r, err := tag.ParseRecipient(s); err == nil {
+		return r, nil
+	}
 	if name, _, err := plugin.ParseRecipient(s); err == nil {
 		// Allowlist check BEFORE NewRecipient, which would exec age-plugin-<name>.
 		if err := requireAllowedPlugin(name); err != nil {
@@ -115,6 +135,9 @@ func ParseIdentity(s string) (age.Identity, error) {
 // ValidateRecipient reports whether s is a well-formed age recipient (plugin or
 // X25519). Encoding-only: it does not run a plugin binary.
 func ValidateRecipient(s string) error {
+	if IsTagRecipient(s) {
+		return nil
+	}
 	if name, _, err := plugin.ParseRecipient(s); err == nil {
 		return requireAllowedPlugin(name)
 	}
@@ -147,11 +170,18 @@ func IsPluginIdentity(s string) bool {
 // RecipientKind classifies a recipient by its *encoding* — the authoritative,
 // un-spoofable signal, derived from the key itself (never stored): "x25519" for
 // a native key, or the plugin name (e.g. "yubikey", "se") for a plugin
-// recipient. extractable is true only for x25519: that's the form whose private
+// recipient, or "tag" / "tagpq" for a native tag recipient. extractable is true
+// only for x25519: that's the form whose private
 // key shh itself can hold as a copyable secret, so it's the form the
 // rotation-on-leak rule applies to. Plugin recipients delegate extractability to
 // their backing (hardware for yubikey/se), so they're reported not-extractable.
 func RecipientKind(pubKey string) (kind string, extractable bool) {
+	if r, err := tag.ParseRecipient(pubKey); err == nil {
+		if r.Hybrid() {
+			return "tagpq", false
+		}
+		return "tag", false
+	}
 	if name, _, err := plugin.ParseRecipient(pubKey); err == nil {
 		return name, false
 	}

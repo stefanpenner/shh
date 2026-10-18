@@ -1,6 +1,7 @@
 package encfile
 
 import (
+	"filippo.io/age"
 	"github.com/cockroachdb/errors"
 
 	"github.com/stefanpenner/shh/internal/crypto"
@@ -34,6 +35,42 @@ func Open(file []byte, identity string) (*Session, error) {
 	dataKey, err := resolveDataKey(ef, identity)
 	if err != nil {
 		return nil, err
+	}
+	if err := verifyMAC(ef, dataKey); err != nil {
+		clearBytes(dataKey)
+		return nil, err
+	}
+	return &Session{file: ef, dataKey: dataKey}, nil
+}
+
+// OpenIdentity is Open for a caller that holds an age.Identity in process, such
+// as a TPM key loaded with age-plugin-tpm's library. The recipient can't be
+// derived from such an identity, so each wrapped key is tried in name order.
+// The MAC is checked before the session is returned. v1 files are refused:
+// they predate per-recipient wrapping.
+func OpenIdentity(file []byte, identity age.Identity) (*Session, error) {
+	if len(file) == 0 {
+		return nil, errors.New("vault file is empty")
+	}
+	if identity == nil {
+		return nil, errors.New("identity is nil")
+	}
+	ef, err := LoadFromBytes(file)
+	if err != nil {
+		return nil, err
+	}
+	if ef.Version == 1 {
+		return nil, errors.New("vault is format v1; run any shh write to upgrade it")
+	}
+	var dataKey []byte
+	for _, name := range envutil.SortedKeys(ef.WrappedKeys) {
+		if k, err := crypto.UnwrapDataKeyWith(ef.WrappedKeys[name], identity); err == nil {
+			dataKey = k
+			break
+		}
+	}
+	if dataKey == nil {
+		return nil, errors.New("this identity is not in the recipients list (no wrapped key could be unwrapped)")
 	}
 	if err := verifyMAC(ef, dataKey); err != nil {
 		clearBytes(dataKey)

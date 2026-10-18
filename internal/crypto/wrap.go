@@ -41,13 +41,22 @@ func WrapDataKeyPerRecipient(dataKey []byte, recipients map[string]string) (map[
 }
 
 func UnwrapDataKey(wrapped string, privateKey string) ([]byte, error) {
-	data, err := base64.StdEncoding.DecodeString(wrapped)
-	if err != nil {
-		return nil, errors.Wrap(err, "base64 decode data key")
-	}
 	identity, err := ParseIdentity(privateKey)
 	if err != nil {
 		return nil, err
+	}
+	return UnwrapDataKeyWith(wrapped, identity)
+}
+
+// UnwrapDataKeyWith unwraps a data key with an age.Identity the caller already
+// holds, such as a TPM identity loaded in process. No plugin binary runs.
+func UnwrapDataKeyWith(wrapped string, identity age.Identity) ([]byte, error) {
+	if identity == nil {
+		return nil, errors.New("identity is nil")
+	}
+	data, err := base64.StdEncoding.DecodeString(wrapped)
+	if err != nil {
+		return nil, errors.Wrap(err, "base64 decode data key")
 	}
 	r, err := age.Decrypt(bytes.NewReader(data), identity)
 	if err != nil {

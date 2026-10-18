@@ -11,6 +11,7 @@ import (
 	sshtoa "github.com/Mic92/ssh-to-age"
 	"github.com/cockroachdb/errors"
 
+	"github.com/stefanpenner/shh/internal/crypto"
 	"github.com/stefanpenner/shh/internal/envutil"
 )
 
@@ -69,10 +70,11 @@ func RequireUsername() (string, error) {
 }
 
 // ResolveUserKey resolves the argument to an age public key and a recipient name.
-// Age public keys (age1...) are accepted directly.
+// Age public keys (age1..., and tag keys age1tag1... / age1tagpq1...) are
+// accepted directly.
 // Everything else is treated as a GitHub username.
 func ResolveUserKey(arg string) (ageKey, name string, err error) {
-	if envutil.AgeKeyPattern.MatchString(arg) {
+	if envutil.AgeKeyPattern.MatchString(arg) || crypto.IsTagRecipient(arg) {
 		return arg, arg, nil
 	}
 	if !envutil.GithubUserPattern.MatchString(arg) {
