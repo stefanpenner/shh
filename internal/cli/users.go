@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"filippo.io/age"
 	"github.com/cockroachdb/errors"
+	"golang.org/x/term"
 
 	"github.com/stefanpenner/shh/internal/crypto"
 	"github.com/stefanpenner/shh/internal/encfile"
@@ -47,6 +50,7 @@ func usersListCmd() error {
 
 	fmt.Println(headerStyle.Render("Authorized users"))
 	i := 0
+	hasExtractable := false
 	for _, name := range envutil.SortedKeys(ef.Recipients) {
 		i++
 		pubKey := ef.Recipients[name]
@@ -54,14 +58,61 @@ func usersListCmd() error {
 		if pubKey == myKey {
 			marker = " " + youStyle.Render("(you)")
 		}
+		if _, extractable := crypto.RecipientKind(pubKey); extractable {
+			hasExtractable = true
+		}
 		kind := hintStyle.Render("[" + recipientKindLabel(pubKey) + "]")
 		fmt.Printf("  %d. %s  %s %s%s\n", i, keyStyle.Render(pubKey), nameStyle.Render(name), kind, marker)
+	}
+	if hasExtractable {
+		fmt.Println()
+		fmt.Println(hintStyle.Render(extractableWarning))
 	}
 	return nil
 }
 
+// extractableWarning reinforces the rotation-on-leak rule for copyable keys.
+const extractableWarning = "warning: extractable (x25519) keys can be copied. If one leaks, rotate the upstream secrets; the git history stays readable to that key."
+
 func usersAddCmd(args []string, deployName, deployKey, qrOut string, printQR bool) error {
-	newKey, name, generatedSecret, err := resolveAddRecipient(args, deployName, deployKey)
+	return usersAddConfirmed(args, deployName, deployKey, qrOut, printQR, false)
+}
+
+// confirmPrompt asks a y/N question on stderr. Overridable in tests.
+var confirmPrompt = func(q string) (bool, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return false, errors.New("stdin is not a terminal")
+	}
+	fmt.Fprint(os.Stderr, q)
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && line == "" {
+		return false, err
+	}
+	ans := strings.ToLower(strings.TrimSpace(line))
+	return ans == "y" || ans == "yes", nil
+}
+
+// confirmGitHubKey shows the fetched key's identity and requires an explicit
+// yes (or --confirm). Nothing is auto-accepted.
+func confirmGitHubKey(username, ageKey, sshFingerprint string, confirmed bool) error {
+	fmt.Printf("  age public key:  %s\n", ageKey)
+	fmt.Printf("  SSH fingerprint: %s\n", sshFingerprint)
+	fmt.Println(hintStyle.Render("Compare with the key you expect for " + username + " (e.g. out of band) before granting access."))
+	if confirmed {
+		return nil
+	}
+	ok, err := confirmPrompt(fmt.Sprintf("Grant %s access with this key? [y/N] ", username))
+	if err != nil {
+		return errors.Wrap(err, "could not prompt for confirmation (use --confirm after verifying the fingerprint)")
+	}
+	if !ok {
+		return errors.New("not confirmed: key was not added (re-run with --confirm after verifying the fingerprint)")
+	}
+	return nil
+}
+
+func usersAddConfirmed(args []string, deployName, deployKey, qrOut string, printQR, confirmed bool) error {
+	newKey, name, generatedSecret, err := resolveAddRecipient(args, deployName, deployKey, confirmed)
 	if err != nil {
 		return err
 	}
@@ -96,13 +147,21 @@ func usersAddCmd(args []string, deployName, deployKey, qrOut string, printQR boo
 
 // resolveAddRecipient returns the key and name to grant.
 // generatedSecret is set only when this call minted an extractable identity.
-func resolveAddRecipient(args []string, deployName, deployKey string) (string, string, string, error) {
+func resolveAddRecipient(args []string, deployName, deployKey string, confirmed bool) (string, string, string, error) {
 	if deployName != "" {
 		return deployRecipient(deployName, deployKey)
 	}
 	if len(args) > 0 {
-		key, name, err := github.ResolveUserKey(args[0])
-		return key, name, "", err
+		info, err := github.ResolveUser(args[0])
+		if err != nil {
+			return "", "", "", err
+		}
+		if info.SSHFingerprint != "" {
+			if err := confirmGitHubKey(args[0], info.AgeKey, info.SSHFingerprint, confirmed); err != nil {
+				return "", "", "", err
+			}
+		}
+		return info.AgeKey, info.Name, "", nil
 	}
 	return "", "", "", errors.New("provide a GitHub username, age public key, or use --name for deploy keys")
 }

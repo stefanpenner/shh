@@ -3,6 +3,7 @@ package envutil
 import (
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/cockroachdb/errors"
 )
@@ -49,8 +50,38 @@ var (
 		"RUBYOPT":              true, // Ruby: -r flag loads an arbitrary file on startup
 		"PERL5OPT":             true, // Perl: -M flag loads an arbitrary module on startup
 		"DOTNET_STARTUP_HOOKS": true, // .NET: loads an arbitrary assembly before Main()
+		// More dynamic-linker / libc loading hooks.
+		"LD_AUDIT": true, "LD_ORIGIN_PATH": true,
+		"GCONV_PATH": true, "LOCPATH": true, "NLSPATH": true, "HOSTALIASES": true,
+		// Tools that execute a user-supplied command line.
+		"GIT_SSH_COMMAND": true, "GIT_SSH": true, "GIT_ASKPASS": true, "SSH_ASKPASS": true,
+		"GIT_EXTERNAL_DIFF": true, "GIT_PAGER": true, "GIT_PROXY_COMMAND": true,
+		"GIT_CONFIG_GLOBAL": true, "GIT_CONFIG_SYSTEM": true, "GIT_CONFIG_COUNT": true,
+		"TAR_OPTIONS": true, "PAGER": true, "MANPAGER": true, "LESSOPEN": true, "LESSCLOSE": true,
+		"EDITOR": true, "VISUAL": true,
+		// Extra shell behaviour/startup knobs.
+		"SHELLOPTS": true, "BASHOPTS": true, "PS4": true, "CDPATH": true, "GLOBIGNORE": true,
+		// Language module search paths: load attacker-controlled code.
+		"PYTHONPATH": true, "PYTHONHOME": true, "PERL5LIB": true, "RUBYLIB": true, "NODE_PATH": true,
 	}
+
+	// dangerousEnvPrefixes block whole families of names, e.g. exported bash
+	// functions (BASH_FUNC_name%%) that run code when a child bash starts.
+	dangerousEnvPrefixes = []string{"BASH_FUNC_"}
 )
+
+// IsDangerousEnvVar reports whether key must never be stored or injected.
+func IsDangerousEnvVar(key string) bool {
+	if DangerousEnvVars[key] {
+		return true
+	}
+	for _, p := range dangerousEnvPrefixes {
+		if strings.HasPrefix(key, p) {
+			return true
+		}
+	}
+	return false
+}
 
 // ValidateEnvName returns an error if envName contains path separators or other
 // characters that could cause path traversal when constructing filenames.

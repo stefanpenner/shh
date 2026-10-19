@@ -52,7 +52,7 @@ Parse does not start a program. Wrap and decrypt start `age-plugin-<name>` from 
 
 ## GitHub
 
-`shh users add NAME` requests `https://github.com/NAME.keys` over HTTPS. Redirects must stay on `github.com`. The limit is 3 redirects, 30 seconds, and 1 MiB. shh uses the first `ssh-ed25519` line. It does not ask you to compare a fingerprint.
+`shh users add NAME` requests `https://github.com/NAME.keys` over HTTPS. Redirects must stay on `github.com`. The limit is 3 redirects, 30 seconds, and 1 MiB. shh uses the first `ssh-ed25519` line. It then prints the age public key and the SSH SHA256 fingerprint and requires explicit confirmation: an interactive `y`, or `--confirm` after you have checked the fingerprint out of band. Nothing is auto-accepted.
 
 `shh init` and `shh login` can derive an age key from an ed25519 file in `~/.ssh`. They use the first file that they find. Directory order is the rule.
 
@@ -60,7 +60,7 @@ Parse does not start a program. Wrap and decrypt start `age-plugin-<name>` from 
 
 `shh run` and `shh shell` inject vault names into the child. shh drops `SHH_AGE_KEY`, `SHH_PLAINTEXT`, and `SHH_ALLOWED_AGE_PLUGINS` from that child.
 
-shh also skips a fixed list of dangerous names, on write and on inject. The list includes `PATH`, `LD_PRELOAD`, `BASH_ENV`, `NODE_OPTIONS`, and `JAVA_TOOL_OPTIONS`. It does not include every name that can start a program. `LD_AUDIT`, `GIT_SSH_COMMAND`, and `TAR_OPTIONS` are examples that are still absent.
+shh also skips a fixed list of dangerous names, on write and on inject. The list includes `PATH`, `LD_PRELOAD`, `LD_AUDIT`, `BASH_ENV`, `NODE_OPTIONS`, `JAVA_TOOL_OPTIONS`, `GIT_SSH_COMMAND`, `TAR_OPTIONS`, the language path variables (`PYTHONPATH`, `NODE_PATH`, …), and every name that starts with `BASH_FUNC_`. It cannot include every name that can start a program; it is a denylist, not a guarantee.
 
 `shh env` quotes values with POSIX single quotes. You must pass `--stdout`.
 
@@ -68,7 +68,7 @@ shh also skips a fixed list of dangerous names, on write and on inject. The list
 
 argon2id uses 256 MiB, time 3, and 4 threads. The salt is the public label `shh-brainkey-v1`. Do not change those parameters. The same phrase yields the same key in every project.
 
-The vault is public. A weak phrase allows an offline guess. Use 8 generated diceware words. Enrollment rejects a phrase shorter than 12 characters. That floor does not measure entropy.
+The vault is public. A weak phrase allows an offline guess. Use 8 generated diceware words. Enrollment rejects a phrase shorter than 12 characters, one with fewer than 8 distinct characters, or one with a single character class (a space counts as a class, so word phrases pass). These floors do not measure entropy. The argon2id parameters stay fixed.
 
 See `docs/passphrase-security.md`.
 
@@ -80,7 +80,7 @@ Treat the PNG, the terminal QR, and the printed page as the private key. Remove 
 
 ## Edit file
 
-`shh edit` writes plaintext to `.shh-edit-*.env` beside the vault. The mode is `0600`. Do not commit that file. A normal exit removes it. `SIGKILL` can leave it.
+`shh edit` writes plaintext to `.shh-edit-*.env` beside the vault. The mode is `0600`. Do not commit that file. A normal exit, or SIGINT/SIGTERM, overwrites it with zeros and then removes it. The overwrite is best-effort: copy-on-write and journaled filesystems and SSD wear-levelling can keep old blocks. `SIGKILL` and power loss skip cleanup and can leave the file.
 
 ## Writes
 
@@ -108,7 +108,8 @@ shh trusts these parties:
 | Secret already seen | Removal does not change the upstream value. |
 | Git history | An old recipient can open the old blob. |
 | Secret names | Names stay plaintext. |
-| `shh set KEY value` | Other users on the machine can see the argument. Use `shh set KEY -`. |
-| `shh doctor` | A broken MAC can still look healthy. |
+| `shh set KEY value` | shh refuses it unless you pass `--allow-arg`, because other users on the machine can see the argument. Use `shh set KEY -`. |
+| `shh doctor` | It verifies the MAC only when your key is a recipient. The MAC does not stop a recipient who holds the data key. |
+| Extractable keys | `shh doctor` and `shh users list` warn when a recipient is an x25519 key. A leaked copy cannot be revoked: rotate upstream secrets; git history stays readable. |
 | Conflict merge | A recipient mismatch stops the merge. `shh users` changes the set. |
 | Memory | Go does not wipe the data key or the plaintext. |

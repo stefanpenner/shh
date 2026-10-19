@@ -113,7 +113,7 @@ func cmdEdit(file string, accept bool) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmpPath)
+	defer scrubAndRemove(tmpPath)
 	defer stopSignals()
 
 	changed, err := runEditor(tmpPath)
@@ -209,7 +209,7 @@ func gateKey(key, note string) error {
 	if !envutil.EnvVarKeyPattern.MatchString(key) {
 		return errors.Newf("invalid key name %q (must match [A-Za-z_][A-Za-z0-9_]*)%s", key, note)
 	}
-	if envutil.DangerousEnvVars[key] {
+	if envutil.IsDangerousEnvVar(key) {
 		return errors.Newf("setting %q is not allowed (dangerous environment variable)%s", key, note)
 	}
 	return nil
@@ -304,7 +304,7 @@ func writeEditTemp(file string, secrets map[string]string) (string, func(), erro
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		os.Remove(tmpPath) // #nosec G104 -- signal handler; best-effort cleanup
+		scrubAndRemove(tmpPath)
 		os.Exit(1)
 	}()
 	stopSignals := func() { signal.Stop(sigCh) }
@@ -321,6 +321,30 @@ func writeEditTemp(file string, secrets map[string]string) (string, func(), erro
 		return "", nil, errors.Wrap(err, "close temp file")
 	}
 	return tmpPath, stopSignals, nil
+}
+
+// scrubAndRemove best-effort overwrites the plaintext temp file with zeros,
+// syncs, then unlinks it. It cannot help on copy-on-write or journaled storage
+// that keeps old blocks, and SIGKILL skips it entirely.
+func scrubAndRemove(path string) {
+	if f, err := os.OpenFile(path, os.O_WRONLY, 0); err == nil { // #nosec G304
+		if info, err := f.Stat(); err == nil && info.Mode().IsRegular() {
+			zeros := make([]byte, 4096)
+			for remaining := info.Size(); remaining > 0; {
+				n := int64(len(zeros))
+				if remaining < n {
+					n = remaining
+				}
+				if _, err := f.Write(zeros[:n]); err != nil {
+					break
+				}
+				remaining -= n
+			}
+			f.Sync() // #nosec G104 -- best-effort
+		}
+		f.Close() // #nosec G104 -- best-effort
+	}
+	os.Remove(path) // #nosec G104 -- best-effort cleanup
 }
 
 func runEditor(tmpPath string) (bool, error) {

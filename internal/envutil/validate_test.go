@@ -119,3 +119,12 @@ func TestDangerousEnvVarDenylist(t *testing.T) {
 	assert.False(t, DangerousEnvVars["DATABASE_URL"])
 	assert.False(t, DangerousEnvVars["API_KEY"])
 }
+
+func TestIsDangerousEnvVarExpanded(t *testing.T) {
+	for _, key := range []string{"LD_AUDIT", "GIT_SSH_COMMAND", "TAR_OPTIONS", "BASH_FUNC_foo%%", "BASH_FUNC_x", "PYTHONPATH", "SHELLOPTS"} {
+		assert.True(t, IsDangerousEnvVar(key), key)
+	}
+	for _, key := range []string{"DATABASE_URL", "API_KEY", "BASH_FUNCTION_X", "MY_BASH_FUNC_X"} {
+		assert.False(t, IsDangerousEnvVar(key), key)
+	}
+}

@@ -18,7 +18,7 @@ import (
 // file written outside shh set/edit (hand-edited TOML, a rogue recipient, a
 // merge) can still carry them.
 func skipDangerous(w io.Writer, key string) bool {
-	if !envutil.DangerousEnvVars[key] {
+	if !envutil.IsDangerousEnvVar(key) {
 		return false
 	}
 	fmt.Fprintf(w, "warning: skipping dangerous env var %q from secrets file\n", key)

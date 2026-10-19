@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"syscall"
+	"unicode"
 
 	"filippo.io/age"
 	"github.com/cockroachdb/errors"
@@ -68,7 +69,48 @@ func readNewPassphrase() (string, error) {
 	if len(p1) < minPassphraseLen {
 		return "", errors.Newf("passphrase too short (%d chars, need >= %d) — use a generated high-entropy passphrase (e.g. 8 diceware words)", len(p1), minPassphraseLen)
 	}
+	if err := checkPassphraseStrength(p1); err != nil {
+		return "", err
+	}
 	return p1, nil
+}
+
+// minPassphraseClasses / minPassphraseDistinct are coarse diversity floors on top
+// of length. They do not measure entropy; a generated phrase is still required.
+const (
+	minPassphraseClasses  = 2
+	minPassphraseDistinct = 8
+)
+
+// checkPassphraseStrength rejects low-diversity phrases ("aaaaaaaaaaaaa",
+// "123456789012") that pass the length floor. Multi-word phrases (spaces) count
+// the separator as a character class.
+func checkPassphraseStrength(p string) error {
+	var lower, upper, digit, other bool
+	distinct := map[rune]struct{}{}
+	for _, r := range p {
+		distinct[r] = struct{}{}
+		switch {
+		case unicode.IsLower(r):
+			lower = true
+		case unicode.IsUpper(r):
+			upper = true
+		case unicode.IsDigit(r):
+			digit = true
+		default:
+			other = true
+		}
+	}
+	classes := 0
+	for _, b := range []bool{lower, upper, digit, other} {
+		if b {
+			classes++
+		}
+	}
+	if len(distinct) < minPassphraseDistinct || classes < minPassphraseClasses {
+		return errors.Newf("passphrase too predictable (need >= %d distinct characters and >= %d character classes) — use a generated high-entropy passphrase (e.g. 8 diceware words)", minPassphraseDistinct, minPassphraseClasses)
+	}
+	return nil
 }
 
 // passphraseRecipient prompts for a new passphrase and returns the recipient
