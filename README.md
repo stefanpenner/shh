@@ -1,51 +1,30 @@
 # shh
 
-**Warning:** shh is experimental. Do not use it in production yet.
+**Experimental.** Do not use in production.
 
-shh encrypts secret values into `.env.enc`. You can commit that file. The private key stays in the OS keyring.
+Encrypts secret values into `.env.enc`. Commit that file. Private key stays in the OS keyring.
 
-age is the public-key format. A recipient is an age public key. The data key is the 32-byte AES key for the values.
+age wraps the data key. AES-256-GCM encrypts values.
 
 ## When to use
 
-Use shh when a secrets server is too much. A small team shares one repository. People open the vault with age keys. A CI job can use one age key.
+Small team, one repo, age keys. Secrets server is too much.
 
-[What to store](#what-to-store) names the values for the vault.
-
-Use a secrets server in these cases.
-
-- The value must expire.
-- Many applications share the same values.
-- You must record each read.
-- The reader is a cluster workload. It has a cloud role. It has no age key.
-
-A secrets server has one of these forms.
-
-- You run HashiCorp Vault or OpenBao.
-- Doppler, Infisical, Bitwarden Secrets Manager, and 1Password secrets automation host a secrets server.
-- AWS Secrets Manager, Google Secret Manager, and Azure Key Vault serve one cloud each.
+Use a secrets server when:
+- Values must expire
+- Many apps share the same values
+- You must record each read
+- Reader is a cluster workload with a cloud role and no age key
 
 ## What to store
 
-Store a value only when you can change it at the provider.
+Only values you can rotate at the provider.
 
-1. Create the new value at the provider before you disable the old value.
-2. Write the new value with `shh set`.
-3. Disable the old value at the provider.
+1. Create the new value.
+2. `shh set KEY -`
+3. Disable the old value.
 
-You can store an API token, a database password, or a cloud access key when the provider accepts two values that both work.
-
-`shh users remove` rotates the data key. It does not change the value. Git keeps every past `.env.enc`. A key that was a recipient at that time can still open that file.
-
-Change those values at the provider. A value you cannot change still works.
-
-Do not store a value in these cases.
-
-- The value is a seed phrase or a wallet private key. The old key can still sign.
-- The value is an account recovery code. A person who opens the vault can use that code on the account that can change the other values.
-- You already published the private key in a contract or in an app you cannot update.
-- The key encrypts data you cannot encrypt again. The old key can still decrypt that data.
-- The value is the age key, the recovery key, or the passphrase for this vault. The same passphrase makes the same key in every project.
+Do not store seed phrases, recovery codes, or the age key itself. Git keeps every past `.env.enc`. Old recipients can still open old files.
 
 ## Install
 
@@ -53,134 +32,88 @@ Do not store a value in these cases.
 brew install stefanpenner/tap/shh
 ```
 
-From source:
+or
 
 ```bash
 go install github.com/stefanpenner/shh@latest
 ```
 
-`shh init` and `shh users add NAME` need the GitHub CLI (`gh`).
+`shh init` and `shh users add` need `gh`.
 
 ## Start
 
-1. Run `gh auth login`.
-2. Run `shh init`.
-3. Run `shh set DATABASE_URL -`.
-4. Run `shh shell`.
+```bash
+gh auth login
+shh init
+shh set DATABASE_URL -
+shh shell
+```
 
-`shh set KEY -` reads the value from stdin. The value does not enter shell history.
-
-`shh init` derives the age key from the first ed25519 file in `~/.ssh`. Directory order decides which file is first. With no ed25519 file, `shh init` generates a new age key.
+`shh init` derives an age key from the first ed25519 key in `~/.ssh`, or generates one.
 
 ## Commands
 
 | Command | Action |
 | --- | --- |
-| `set KEY -` | Add or change one value. `-` reads stdin. |
-| `get KEY` | Print one value. |
-| `rm KEY` | Remove one name. |
-| `edit` | Edit all values in `$EDITOR`. |
-| `list` | Show names. |
-| `env --stdout` | Print `export` lines. You must pass `--stdout`. |
-| `shell` | Start a shell with the values. |
-| `run -- CMD` | Start a command with the values. |
-| `template FILE` | Replace `{{NAME}}` and print the file. |
-| `paper encode` | Gzip the vault and write QR PNG files. |
-| `paper decode` | Restore the vault from those QR PNG files. |
-| `encrypt FILE` | Encrypt a plaintext env file to `FILE.enc`. |
-| `doctor` | Check the local setup. |
-| `whoami` | Show your public key. |
-| `login` | Store a key in the OS keyring. |
-| `logout` | Remove your key from the OS keyring. |
-| `users` | Show recipients. |
-| `users add` | Add a recipient. |
-| `users remove` | Remove a recipient and rotate the data key. |
+| `set KEY -` | Add or change one value (stdin) |
+| `get KEY` | Print one value |
+| `rm KEY` | Remove one name |
+| `edit` | Edit all values in `$EDITOR` |
+| `list` | Show names |
+| `env --stdout` | Print `export` lines |
+| `shell` | Shell with values |
+| `run -- CMD` | Run command with values |
+| `template FILE` | Replace `{{NAME}}` |
+| `paper encode` | Gzip vault to QR PNGs |
+| `paper decode` | Restore vault from QR PNGs |
+| `encrypt FILE` | Encrypt plaintext env to `FILE.enc` |
+| `doctor` | Check local setup |
+| `whoami` | Show public key |
+| `login` | Store key in OS keyring |
+| `logout` | Remove key from OS keyring |
+| `users` | Show recipients |
+| `users add` | Add recipient |
+| `users remove` | Remove recipient and rotate data key |
 
-The default file is `.env.enc`. `-e NAME` selects `NAME.env.enc`. You can pass a file path as the last argument.
-
-```bash
-shh run -e production -- node app.js
-```
-
-`shh template` inserts the raw value. Quote the value for the target format.
-
-After `shh encrypt .env`, remove the plaintext file.
+Default file: `.env.enc`. `-e NAME` selects `NAME.env.enc`.
 
 ## Team
 
 ```bash
 shh users add alice
-git add .env.enc
-git commit -m "shh: add alice"
-git push
+git add .env.enc && git commit -m "add alice" && git push
 ```
 
-Alice runs `shh login`, then `shh shell`.
+Alice runs `shh login` then `shh shell`.
 
-`shh users add NAME` reads `https://github.com/NAME.keys`. It uses the first `ssh-ed25519` line. `shh users add --key age1…` uses an age public key that you supply.
-
-## iCloud Keychain
-
-The age identity lives in one iCloud Keychain item, account `shh`. The login keychain is a cache. A signed `shh` reads the cloud item and replaces the cache. Logout writes `revoked` and the next signed get on each Mac clears that Mac's cache. An offline `shh` cannot store or log out. `.env.enc` stays in git.
-
-The access group is `YOUR_PREFIX.shh`. The team id is `YOUR_TEAM_ID`. The Mac App ID prefix is `YOUR_PREFIX`. A group that starts with the team id is not in the profile. `SecItemAdd` for `YOUR_TEAM_ID.shh` returns OSStatus -34018.
-
-Create the profile after you accept the Apple Developer Program License Agreement. The command that worked:
-
-```bash
-xcodebuild -project /tmp/shh-mac-profile/ShhProbe.xcodeproj -scheme ShhProbe -configuration Debug -destination 'platform=macOS' -allowProvisioningUpdates CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=YOUR_TEAM_ID build
-```
-
-The bundle id is `com.example.shh`. Xcode writes `Mac Team Provisioning Profile: *` for platform `OSX`. On this Mac the file is `~/Library/Developer/Xcode/UserData/Provisioning Profiles/YOUR_PROFILE_UUID.provisionprofile`. The profile allows `YOUR_PREFIX.*`.
-
-`shh login` writes the iCloud item, then the login item, when the signed binary has `macos/entitlements.plist`. A missing cloud item is filled from the login item once. `shh logout` writes `revoked`. An unsigned binary reads the login cache and returns an error for login and logout.
-
-## iPhone
-
-`ios/ShhIOS` reads that same iCloud item. Face ID unlocks the read. The app opens one `.env.enc` from Files. iOS can also hand the app that file. The file waits until the key is unlocked. A canceled unlock keeps the file. Lock drops it. The screen follows that file. It shows `[recipients]` and `[secrets]`. It hides wrapped keys. A GitHub recipient shows the name and opens that profile. An `shh-user://` name shows the label. An age key stays on the device. The unlocked screen shows your public key. Copy public key stays on this device and does not expire. Secret names stay visible. A value reads Tap to view until a tap. Copy puts that value on a local clipboard for 30 seconds. Hide covers the value. A failed open does not show the raw error or the key. Lock drops the key. The app does not write the key. The app does not add or remove recipients. The app does not log out. A debug build can open a sample vault. That sample is not the iCloud key.
-
-The bundle id is `com.example.shh.ios`. The keychain group is `$(AppIdentifierPrefix)shh`, which is `YOUR_PREFIX.shh` for this team.
-
-```bash
-ios/build-core.sh
-xcodegen generate --spec ios/project.yml
-xcodebuild -project ios/ShhIOS.xcodeproj -scheme ShhIOS -destination 'platform=iOS Simulator,name=iPhone 16' test
-```
+`shh users add NAME` reads the first `ssh-ed25519` key from `https://github.com/NAME.keys`.
 
 ## Keys
 
-| Kind | Private key | CI | Lost device |
-| --- | --- | --- | --- |
-| Extractable X25519 | A string you can copy | Yes. Store it as `SHH_AGE_KEY`. | Use your copy. |
-| YubiKey or Secure Enclave | Stays on the device | No | A second recipient must already exist. |
+| Kind | CI | Lost device |
+| --- | --- | --- |
+| Extractable X25519 | Yes (`SHH_AGE_KEY`) | Use your copy |
+| YubiKey / Secure Enclave | No | Need a second recipient |
 
-Use an extractable key for CI. Use a hardware key for daily work. Enroll two hardware keys when hardware is the recovery path. A hardware key has no copy.
+Use extractable for CI. Use hardware for daily work. Enroll two hardware keys if hardware is the recovery path.
 
-If an extractable key leaks, change the values at the provider. See [What to store](#what-to-store).
-
-`shh users list` marks each recipient. `[extractable]` means that leak rule applies.
+If an extractable key leaks, rotate the values at the provider.
 
 ## Recovery QR
-
-Keep two recipients. One is the daily key. One is the recovery key.
 
 ```bash
 shh users add --name recovery --qr --qr-out ~/Desktop/shh-recovery.png
 ```
 
-shh prints `AGE-SECRET-KEY-1…` once. Store that string in a password manager. The PNG and the terminal QR hold the same secret. Import or print the PNG. Then remove the PNG. Do not commit the PNG.
+Store the printed `AGE-SECRET-KEY-1…` in a password manager. Delete the PNG. Do not commit it.
 
 On a new machine:
 
 ```bash
 shh login --qr-file ~/path/to/shh-recovery.png
-shh doctor
-shh env --stdout
 ```
 
-Or set `SHH_AGE_KEY` to the secret string.
-
-The lifecycle model is `specs/RecoveryQR.tla`.
+Or set `SHH_AGE_KEY`.
 
 ## CI
 
@@ -188,17 +121,13 @@ The lifecycle model is `specs/RecoveryQR.tla`.
 shh users add --name production-deploy
 ```
 
-Store the printed secret as `SHH_AGE_KEY` in CI. Do not print it in logs.
+Store the secret as `SHH_AGE_KEY`. Do not print it.
 
 ```bash
 shh run -- node app.js
 ```
 
-shh removes `SHH_AGE_KEY` from the child environment.
-
 ## Hardware
-
-Decrypt needs the device.
 
 ```bash
 brew install age-plugin-yubikey
@@ -207,31 +136,7 @@ shh users add --name yubikey --key age1yubikey1…
 shh login --identity ~/age-yubikey-identity.txt
 ```
 
-```bash
-brew install age-plugin-se
-age-plugin-se keygen -o se-key.txt
-shh users add --name laptop --key "$(age-plugin-se recipients -i se-key.txt)"
-shh login --identity se-key.txt
-```
-
-On wrap or decrypt, shh runs `age-plugin-yubikey` or `age-plugin-se` from `PATH`. The default allowlist is `yubikey` and `se`. `SHH_ALLOWED_AGE_PLUGINS` adds names for that process.
-
-### Tag keys (TPM, machines)
-
-age 1.3 tag recipients (`age1tag1…`, `age1tagpq1…`) are native in age. shh wraps to them without running a plugin and without the allowlist. A TPM key from `age-plugin-tpm` is one:
-
-```bash
-shh users add --name machine --key age1tag1…
-```
-
-A Go program that holds the identity in process can read the vault with the `vault` package. It never runs a plugin binary and checks the MAC before it returns.
-
-```go
-id, _ := plugin.NewTPMTagIdentity(tpm, handle) // age-plugin-tpm
-v, err := vault.Open(file, id)                  // github.com/stefanpenner/shh/vault
-defer v.Close()
-value, err := v.Secret("NAME")
-```
+Same pattern for `age-plugin-se` and TPM tag keys (`age1tag1…`).
 
 ## Passphrase
 
@@ -240,58 +145,33 @@ shh users add --name failsafe --passphrase
 shh login --passphrase
 ```
 
-Use 8 generated diceware words. Enrollment rejects a phrase shorter than 12 characters. The key is extractable. See `docs/passphrase-security.md`.
+Use 8 diceware words. Minimum 12 characters. See `docs/passphrase-security.md`.
 
 ## File
 
-`.env.enc` is TOML.
+`.env.enc` is TOML (v2).
 
 | Field | Content |
 | --- | --- |
-| `version` | `2`. shh can still read version `1`. |
-| `recipients` | Name to age public key. Names are plaintext. |
-| `wrapped_keys` | Data key, wrapped once per recipient. |
-| `secrets` | AES-256-GCM values. The name binds each value. |
-| `mac` | HMAC-SHA256 over those fields. The MAC key is the data key. |
+| `recipients` | Name → age public key (plaintext) |
+| `wrapped_keys` | Data key wrapped per recipient |
+| `secrets` | AES-256-GCM values (name-bound) |
+| `mac` | HMAC-SHA256 over the fields |
 
-A partial edit fails the MAC check. A person who can replace the file can write a new valid file for the public recipients. `shh set`, `shh edit`, `shh rm`, and `shh encrypt` stop when that recipient set differs from `HEAD`. Pass `--accept-recipients` after you review `shh users list`. `shh doctor` does not check the MAC.
-
-`SHH_PLAINTEXT` selects a plaintext file and skips decrypt. shh prints a warning on stderr.
-
-More limits are in `SECURITY.md`.
+Partial edits fail the MAC. Full replacement is possible by someone who can write the file. `shh set`/`edit`/`rm`/`encrypt` stop if recipients differ from `HEAD` unless `--accept-recipients`.
 
 ## Paper
-
-`shh paper encode` gzips the vault and writes QR PNG files. One code holds 1,400 bytes of that gzip stream at high error correction. A smaller vault uses a smaller code. A larger vault uses the next code, up to 16. A 4,296-character code is larger, and this scanner does not read it reliably. The PNG files are mode `0600`.
 
 ```bash
 shh paper encode --out shh-paper
 shh paper decode shh-paper --out restored.env.enc
 ```
 
-Print the sheet. Scan every code. Decode writes a new file. It does not replace a file that already exists.
-
-The sheet is a copy of `.env.enc`. It does not show secret values. A person who scans it still needs a private key. Remove the PNG files after you print them. Do not commit them.
-
-`shh paper encode` refuses a plaintext env file.
+QR sheet is a copy of `.env.enc`. Still needs a private key. Delete the PNGs after printing.
 
 ## Merge
 
-Each write rewrites `.env.enc`. Git can report a conflict.
-
-`shh merge` is a git merge driver. These commands also merge a conflicted file and stage it:
-
-- `set`
-- `edit`
-- `rm`
-- `encrypt`
-- `users`
-- `login`
-- `whoami`
-
-The merge stops when the recipient sets differ. It does not add or remove a recipient. Two values for one name also stop the merge.
-
-Add or remove a person with `shh users`. Then merge again.
+`shh merge` is a git merge driver.
 
 ```bash
 # .gitattributes
@@ -304,13 +184,7 @@ Add or remove a person with `shh users`. Then merge again.
     driver = shh merge %O %A %B
 ```
 
-Put the driver block in `~/.gitconfig` on each machine.
-
-`shh get`, `shh run`, `shh shell`, `shh env`, `shh doctor`, and `shh template` do not merge a conflict.
-
-## Agents
-
-Copy `CLAUDE.md.example` into the project `CLAUDE.md`.
+Stops on differing recipient sets or conflicting values for one name. Resolve recipients with `shh users`, then merge again.
 
 ## More
 
@@ -320,4 +194,4 @@ Copy `CLAUDE.md.example` into the project `CLAUDE.md`.
 
 ## License
 
-MIT. See `LICENSE`.
+MIT.
