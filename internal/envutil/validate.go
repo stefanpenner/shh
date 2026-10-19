@@ -49,6 +49,10 @@ var (
 		"RUBYOPT":              true, // Ruby: -r flag loads an arbitrary file on startup
 		"PERL5OPT":             true, // Perl: -M flag loads an arbitrary module on startup
 		"DOTNET_STARTUP_HOOKS": true, // .NET: loads an arbitrary assembly before Main()
+		// Additional shell/command injection vectors
+		"LD_AUDIT": true,          // Linux: audit modules loaded by dynamic linker
+		"GIT_SSH_COMMAND": true,   // Git: overrides SSH command, can execute arbitrary code
+		"TAR_OPTIONS": true,       // tar: can inject options that write files or execute
 	}
 )
 

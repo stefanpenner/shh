@@ -68,6 +68,14 @@ func readNewPassphrase() (string, error) {
 	if len(p1) < minPassphraseLen {
 		return "", errors.Newf("passphrase too short (%d chars, need >= %d) — use a generated high-entropy passphrase (e.g. 8 diceware words)", len(p1), minPassphraseLen)
 	}
+	// Crude entropy check: reject phrases that are mostly one character or have very low unique chars
+	unique := make(map[rune]bool)
+	for _, r := range p1 {
+		unique[r] = true
+	}
+	if len(unique) < 6 && len(p1) < 20 {
+		return "", errors.New("passphrase has too little character diversity — use a generated high-entropy passphrase (e.g. 8 diceware words)")
+	}
 	return p1, nil
 }
 

@@ -31,13 +31,15 @@ func TestRunDoctorChecks_AllPass(t *testing.T) {
 		encFile,
 	)
 
-	require.Len(t, checks, 5)
+	require.Len(t, checks, 6)
 	assert.True(t, checks[0].Status, "age key check should pass")
 	assert.Contains(t, checks[0].Message, "age1")
 	assert.True(t, checks[1].Status, "github cli check should pass")
 	assert.True(t, checks[2].Status, "ssh keys check should pass")
 	assert.True(t, checks[3].Status, "encrypted file check should pass")
 	assert.True(t, checks[4].Status, "recipient check should pass")
+	assert.True(t, checks[5].Status, "MAC check should pass")
+	assert.Contains(t, checks[5].Message, "MAC verifies")
 }
 
 func TestRunDoctorChecks_NoKey(t *testing.T) {
@@ -114,8 +116,9 @@ func TestRunDoctorChecks_NotInRecipients(t *testing.T) {
 		encFile,
 	)
 
-	require.Len(t, checks, 5)
+	require.Len(t, checks, 6)
 	assert.True(t, checks[3].Status, "encrypted file check should pass")
 	assert.False(t, checks[4].Status, "recipient check should fail")
 	assert.Contains(t, checks[4].Message, "NOT in the recipients list")
+	assert.False(t, checks[5].Status, "MAC check should fail when key cannot decrypt")
 }

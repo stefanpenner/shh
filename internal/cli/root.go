@@ -215,6 +215,9 @@ func newRootCmd() *cobra.Command {
 				return err
 			}
 
+			if args[1] != "-" {
+				fmt.Fprintln(os.Stderr, hintStyle.Render("warning: secret passed as argument may appear in shell history or process list; prefer 'shh set KEY -'"))
+			}
 			value, err := secretValue(args[1])
 			if err != nil {
 				return err

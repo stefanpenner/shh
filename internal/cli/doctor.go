@@ -54,6 +54,12 @@ func RunDoctorChecks(getKeyFn func() (string, error), ghUsernameFn func() string
 	checks = append(checks, DoctorCheck{"encrypted file", true, fmt.Sprintf("%s (%d secret(s), %d recipient(s))", encFile, len(ef.Secrets), len(ef.Recipients))})
 	if privKey != "" {
 		checks = append(checks, recipientCheck(ef.Recipients, pubKey))
+		// Verify MAC by attempting a full decrypt (catches tampering)
+		if _, err := encfile.DecryptSecrets(ef, privKey); err != nil {
+			checks = append(checks, DoctorCheck{"MAC", false, "MAC verification failed — file may be tampered"})
+		} else {
+			checks = append(checks, DoctorCheck{"MAC", true, "MAC verifies"})
+		}
 	}
 	return checks
 }

@@ -10,3 +10,11 @@ func TestSHHAllowedPluginsIsDangerous(t *testing.T) {
 		t.Fatal("SHH_ALLOWED_AGE_PLUGINS must be in DangerousEnvVars so it can't be set via an injected secret")
 	}
 }
+
+func TestAdditionalDangerousEnvVars(t *testing.T) {
+	for _, key := range []string{"LD_AUDIT", "GIT_SSH_COMMAND", "TAR_OPTIONS"} {
+		if !DangerousEnvVars[key] {
+			t.Errorf("%s should be blocked as a dangerous environment variable", key)
+		}
+	}
+}
