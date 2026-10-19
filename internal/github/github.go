@@ -10,6 +10,7 @@ import (
 
 	sshtoa "github.com/Mic92/ssh-to-age"
 	"github.com/cockroachdb/errors"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/stefanpenner/shh/internal/crypto"
 	"github.com/stefanpenner/shh/internal/envutil"
@@ -69,52 +70,74 @@ func RequireUsername() (string, error) {
 	return username, nil
 }
 
+// ResolvedUser is a resolved recipient. SSHFingerprint is set only when the key
+// was fetched from GitHub (the case that needs out-of-band verification).
+type ResolvedUser struct {
+	AgeKey         string
+	Name           string
+	SSHFingerprint string
+}
+
 // ResolveUserKey resolves the argument to an age public key and a recipient name.
-// Age public keys (age1..., and tag keys age1tag1... / age1tagpq1...) are
-// accepted directly.
-// Everything else is treated as a GitHub username.
 func ResolveUserKey(arg string) (ageKey, name string, err error) {
+	info, err := ResolveUser(arg)
+	return info.AgeKey, info.Name, err
+}
+
+// ResolveUser resolves the argument to a recipient. Age public keys (age1...,
+// and tag keys age1tag1... / age1tagpq1...) are accepted directly.
+// Everything else is treated as a GitHub username.
+func ResolveUser(arg string) (ResolvedUser, error) {
 	if envutil.AgeKeyPattern.MatchString(arg) || crypto.IsTagRecipient(arg) {
-		return arg, arg, nil
+		return ResolvedUser{AgeKey: arg, Name: arg}, nil
 	}
 	if !envutil.GithubUserPattern.MatchString(arg) {
-		return "", "", errors.Newf("invalid GitHub username or age key: %q", arg)
+		return ResolvedUser{}, errors.Newf("invalid GitHub username or age key: %q", arg)
 	}
 
 	fmt.Printf("Fetching SSH keys for github.com/%s...\n", arg)
-	ageKey, err = githubAgeKey(arg)
+	ageKey, fp, err := githubAgeKey(arg)
 	if err != nil {
-		return "", "", err
+		return ResolvedUser{}, err
 	}
-	fmt.Printf("Converted %s's SSH key -> %s\n", arg, ageKey)
-	return ageKey, "https://github.com/" + arg, nil
+	fmt.Printf("Converted %s's SSH key -> age key\n", arg)
+	return ResolvedUser{AgeKey: ageKey, Name: "https://github.com/" + arg, SSHFingerprint: fp}, nil
 }
 
-// githubAgeKey fetches username's ed25519 SSH key and returns the age recipient.
-func githubAgeKey(username string) (string, error) {
+// githubAgeKey fetches username's ed25519 SSH key and returns the age recipient
+// and the SSH SHA256 fingerprint.
+func githubAgeKey(username string) (string, string, error) {
 	resp, err := httpClient.Get("https://github.com/" + username + ".keys")
 	if err != nil {
-		return "", errors.Wrap(err, "fetch keys")
+		return "", "", errors.Wrap(err, "fetch keys")
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return "", errors.Newf("could not fetch keys for %q (HTTP %d)", username, resp.StatusCode)
+		return "", "", errors.Newf("could not fetch keys for %q (HTTP %d)", username, resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	line := ed25519Line(string(body))
 	if line == "" {
-		return "", errors.Newf("no ed25519 SSH key found for %q (age requires ed25519)", username)
+		return "", "", errors.Newf("no ed25519 SSH key found for %q (age requires ed25519)", username)
+	}
+	return ageFromSSHLine(line)
+}
+
+func ageFromSSHLine(line string) (string, string, error) {
+	pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(line))
+	if err != nil {
+		return "", "", errors.Wrap(err, "parse ssh key")
 	}
 	ageKey, err := sshtoa.SSHPublicKeyToAge([]byte(line))
 	if err != nil {
-		return "", errors.Wrap(err, "ssh-to-age")
+		return "", "", errors.Wrap(err, "ssh-to-age")
 	}
-	return *ageKey, nil
+	return *ageKey, ssh.FingerprintSHA256(pub), nil
 }
 
 func ed25519Line(body string) string {

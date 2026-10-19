@@ -9,7 +9,7 @@ Encrypted secrets manager for teams. Age encryption, envelope encryption, per-re
 
 ## Working with secrets
 
-- `shh set KEY value` to add/update — prefer `shh set KEY -` (stdin) to avoid shell history exposure
+- `shh set KEY value` to add/update (needs `--allow-arg`) — prefer `shh set KEY -` (stdin) to avoid shell history exposure
 - `shh rm KEY` to remove
 - `shh edit` to batch edit in `$EDITOR`
 - `shh run -- <cmd>` to run with secrets injected

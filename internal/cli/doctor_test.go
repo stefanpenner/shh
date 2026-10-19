@@ -31,7 +31,7 @@ func TestRunDoctorChecks_AllPass(t *testing.T) {
 		encFile,
 	)
 
-	require.Len(t, checks, 5)
+	require.Len(t, checks, 7) // + mac + extractable warning
 	assert.True(t, checks[0].Status, "age key check should pass")
 	assert.Contains(t, checks[0].Message, "age1")
 	assert.True(t, checks[1].Status, "github cli check should pass")
@@ -114,7 +114,7 @@ func TestRunDoctorChecks_NotInRecipients(t *testing.T) {
 		encFile,
 	)
 
-	require.Len(t, checks, 5)
+	require.Len(t, checks, 6) // + extractable warning
 	assert.True(t, checks[3].Status, "encrypted file check should pass")
 	assert.False(t, checks[4].Status, "recipient check should fail")
 	assert.Contains(t, checks[4].Message, "NOT in the recipients list")

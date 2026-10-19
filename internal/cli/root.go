@@ -60,8 +60,13 @@ func encFileAt(cmd *cobra.Command, args []string, at int) (string, error) {
 }
 
 // secretValue reads "-" from stdin so the secret never lands in argv.
-func secretValue(value string) (string, error) {
+// A literal value is refused unless allowArg is set: argv is visible to other
+// local users (ps, /proc) and lands in shell history.
+func secretValue(value string, allowArg bool) (string, error) {
 	if value != "-" {
+		if !allowArg {
+			return "", errors.New("refusing to take a secret value from the command line (visible in process lists and shell history); use 'shh set KEY -' to read from stdin, or pass --allow-arg to override")
+		}
 		return value, nil
 	}
 	data, err := io.ReadAll(os.Stdin)
@@ -102,7 +107,7 @@ func runUsersAdd(cmd *cobra.Command, args []string) error {
 		key = derived
 	}
 
-	return usersAddCmd(args, name, key, mustString(cmd, "qr-out"), mustBool(cmd, "qr"))
+	return usersAddConfirmed(args, name, key, mustString(cmd, "qr-out"), mustBool(cmd, "qr"), mustBool(cmd, "confirm"))
 }
 
 func newRootCmd() *cobra.Command {
@@ -215,13 +220,14 @@ func newRootCmd() *cobra.Command {
 				return err
 			}
 
-			value, err := secretValue(args[1])
+			value, err := secretValue(args[1], mustBool(cmd, "allow-arg"))
 			if err != nil {
 				return err
 			}
 			return cmdSet(file, args[0], value, mustBool(cmd, "accept-recipients"))
 		},
 	}
+	setCmd.Flags().Bool("allow-arg", false, "Allow the value as a command-line argument (insecure: visible in ps and shell history)")
 	envFlag(setCmd)
 	acceptFlag(setCmd)
 	rootCmd.AddCommand(setCmd)
@@ -340,6 +346,7 @@ func newRootCmd() *cobra.Command {
 	addCmd.Flags().Bool("passphrase", false, "Derive the recipient from a passphrase (brain key); prompts for it")
 	addCmd.Flags().Bool("qr", false, "When generating a secret key, print a terminal QR (for paper / 1Password scan)")
 	addCmd.Flags().String("qr-out", "", "When generating a secret key, write a PNG QR to this path (0600)")
+	addCmd.Flags().Bool("confirm", false, "Confirm a GitHub-fetched key non-interactively (after verifying the printed fingerprint)")
 	usersCmd.AddCommand(addCmd)
 
 	usersCmd.AddCommand(&cobra.Command{

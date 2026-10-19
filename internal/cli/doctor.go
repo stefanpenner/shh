@@ -53,9 +53,39 @@ func RunDoctorChecks(getKeyFn func() (string, error), ghUsernameFn func() string
 	}
 	checks = append(checks, DoctorCheck{"encrypted file", true, fmt.Sprintf("%s (%d secret(s), %d recipient(s))", encFile, len(ef.Secrets), len(ef.Recipients))})
 	if privKey != "" {
-		checks = append(checks, recipientCheck(ef.Recipients, pubKey))
+		rc := recipientCheck(ef.Recipients, pubKey)
+		checks = append(checks, rc)
+		if rc.Status {
+			checks = append(checks, macCheck(ef, privKey))
+		}
+	}
+	if c, ok := extractableCheck(ef.Recipients); ok {
+		checks = append(checks, c)
 	}
 	return checks
+}
+
+// macCheck decrypts with the caller's key, which verifies the file MAC first.
+func macCheck(ef *encfile.EncryptedFile, privKey string) DoctorCheck {
+	if _, err := encfile.DecryptSecrets(ef, privKey); err != nil {
+		return DoctorCheck{"mac", false, "verification failed: " + err.Error()}
+	}
+	return DoctorCheck{"mac", true, "file MAC verified"}
+}
+
+// extractableCheck is advisory (Status stays true): extractable x25519 keys are
+// a standing risk, not a broken install.
+func extractableCheck(recipients map[string]string) (DoctorCheck, bool) {
+	n := 0
+	for _, pk := range recipients {
+		if _, extractable := crypto.RecipientKind(pk); extractable {
+			n++
+		}
+	}
+	if n == 0 {
+		return DoctorCheck{}, false
+	}
+	return DoctorCheck{"extractable keys", true, fmt.Sprintf("warning: %d extractable (x25519) recipient(s); on leak, rotate upstream secrets — git history stays readable", n)}, true
 }
 
 func recipientCheck(recipients map[string]string, pubKey string) DoctorCheck {

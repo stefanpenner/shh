@@ -68,7 +68,7 @@ go install github.com/stefanpenner/shh@latest
 3. Run `shh set DATABASE_URL -`.
 4. Run `shh shell`.
 
-`shh set KEY -` reads the value from stdin. The value does not enter shell history.
+`shh set KEY -` reads the value from stdin. The value does not enter shell history. `shh set KEY value` is refused unless you pass `--allow-arg`.
 
 `shh init` derives the age key from the first ed25519 file in `~/.ssh`. Directory order decides which file is first. With no ed25519 file, `shh init` generates a new age key.
 
@@ -117,7 +117,7 @@ git push
 
 Alice runs `shh login`, then `shh shell`.
 
-`shh users add NAME` reads `https://github.com/NAME.keys`. It uses the first `ssh-ed25519` line. `shh users add --key age1…` uses an age public key that you supply.
+`shh users add NAME` reads `https://github.com/NAME.keys`. It uses the first `ssh-ed25519` line. `shh users add --key age1…` uses an age public key that you supply. shh prints the age key and SSH fingerprint and asks you to confirm (`y`, or `--confirm`) before adding. `shh doctor` and `shh users list` warn when a recipient is an extractable x25519 key.
 
 ## iCloud Keychain
 
