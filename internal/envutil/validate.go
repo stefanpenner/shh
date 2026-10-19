@@ -21,7 +21,7 @@ var (
 		// Core identity / path variables
 		"PATH": true, "HOME": true, "SHELL": true, "USER": true, "LOGNAME": true,
 		// Linux dynamic-linker injection
-		"LD_PRELOAD": true, "LD_LIBRARY_PATH": true,
+		"LD_PRELOAD": true, "LD_LIBRARY_PATH": true, "LD_AUDIT": true,
 		// macOS dynamic-linker injection
 		"DYLD_INSERT_LIBRARIES": true, "DYLD_LIBRARY_PATH": true, "DYLD_FRAMEWORK_PATH": true,
 		// Shell startup files: bash sources BASH_ENV on non-interactive invocations;
@@ -46,9 +46,14 @@ var (
 		"_JAVA_OPTIONS":        true, // alternative JVM option variable (same risk)
 		"JDK_JAVA_OPTIONS":     true, // Java 9+ launcher option variable (same risk)
 		"PYTHONSTARTUP":        true, // Python: executes an arbitrary file on interpreter startup
+		"PYTHONPATH":           true, // Python: prepends attacker dirs to sys.path
 		"RUBYOPT":              true, // Ruby: -r flag loads an arbitrary file on startup
 		"PERL5OPT":             true, // Perl: -M flag loads an arbitrary module on startup
+		"PERL5LIB":             true, // Perl: prepends dirs to @INC
 		"DOTNET_STARTUP_HOOKS": true, // .NET: loads an arbitrary assembly before Main()
+		// Additional injection / tool-specific
+		"GIT_SSH_COMMAND": true, // Git: overrides SSH command, can execute arbitrary code
+		"TAR_OPTIONS":     true, // tar: can inject options that execute code via --to-command etc.
 	}
 )
 
