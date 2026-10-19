@@ -34,7 +34,7 @@ A full replacement is different. The public recipients are in the file. A person
 
 A current recipient can also edit the vault and recompute the MAC. That person already has the data key.
 
-`shh doctor` does not check the MAC.
+`shh doctor` verifies the MAC when a private key is available.
 
 ## People
 
@@ -52,7 +52,7 @@ Parse does not start a program. Wrap and decrypt start `age-plugin-<name>` from 
 
 ## GitHub
 
-`shh users add NAME` requests `https://github.com/NAME.keys` over HTTPS. Redirects must stay on `github.com`. The limit is 3 redirects, 30 seconds, and 1 MiB. shh uses the first `ssh-ed25519` line. It does not ask you to compare a fingerprint.
+`shh users add NAME` requests `https://github.com/NAME.keys` over HTTPS. Redirects must stay on `github.com`. The limit is 3 redirects, 30 seconds, and 1 MiB. shh uses the first `ssh-ed25519` line. It prints the converted age key and recommends verifying it out-of-band (fingerprint confirmation is planned).
 
 `shh init` and `shh login` can derive an age key from an ed25519 file in `~/.ssh`. They use the first file that they find. Directory order is the rule.
 
@@ -112,3 +112,10 @@ shh trusts these parties:
 | `shh doctor` | A broken MAC can still look healthy. |
 | Conflict merge | A recipient mismatch stops the merge. `shh users` changes the set. |
 | Memory | Go does not wipe the data key or the plaintext. |
+
+## Recent hardening
+
+- Doctor now verifies the MAC when a key is present.
+- Additional dangerous environment variables are blocked on inject (`LD_AUDIT`, `GIT_SSH_COMMAND`, `TAR_OPTIONS`).
+- `shh set KEY value` warns when the value is passed as an argument.
+- Passphrase enrollment rejects low-diversity phrases.
