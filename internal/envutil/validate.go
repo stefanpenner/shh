@@ -49,6 +49,15 @@ var (
 		"RUBYOPT":              true, // Ruby: -r flag loads an arbitrary file on startup
 		"PERL5OPT":             true, // Perl: -M flag loads an arbitrary module on startup
 		"DOTNET_STARTUP_HOOKS": true, // .NET: loads an arbitrary assembly before Main()
+		// Additional shell/command injection vectors
+		"LD_AUDIT": true,
+		"GIT_SSH_COMMAND": true,
+		"TAR_OPTIONS": true,
+		"PYTHONPATH": true,
+		"NODE_PATH": true,
+		"RUBYLIB": true,
+		"PERL5LIB": true,
+		"CLASSPATH": true,
 	}
 )
 
